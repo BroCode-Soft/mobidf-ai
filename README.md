@@ -11,8 +11,6 @@ SaaS B2G que resolve o gargalo logístico do DF via análise geoespacial, sincro
 - [Visão Geral](#visão-geral)
 - [Algoritmos Centrais](#algoritmos-centrais)
 - [Como Rodar](#como-rodar)
-  - [Modo Mock (sem Docker — recomendado para demo)](#modo-mock-sem-docker--recomendado-para-demo)
-  - [Modo Completo (Docker + PostgreSQL)](#modo-completo-docker--postgresql)
 - [Arquitetura](#arquitetura)
 - [Stack Técnica](#stack-técnica)
 - [Estrutura do Projeto](#estrutura-do-projeto)
@@ -44,89 +42,37 @@ O MobiDF AI resolve isso com três algoritmos sobre dados públicos já existent
 
 ## Como Rodar
 
-### Modo Mock (sem Docker — recomendado para demo)
-
-Roda **100% local** com Python + Node. Sem Docker, sem banco de dados, sem configuração extra.
-
-#### Pré-requisitos
-
-- Python 3.9+
-- Node.js 18+
-
-#### Passo a passo
+**Pré-requisitos:** Python 3.9+ e Node.js 18+. Nada mais.
 
 ```bash
-# 1. Clone
 git clone https://github.com/FelipeJesusMartins/mobidf-ai.git
 cd mobidf-ai
-
-# 2. Backend mock (FastAPI com dados em memória)
-python -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install fastapi uvicorn
-
-uvicorn mock_server:app --reload --port 8000
-# API rodando em http://localhost:8000
-# Docs interativos em http://localhost:8000/docs
+./run.sh
 ```
 
-Abra outro terminal:
+O script faz tudo automaticamente:
+- Cria o virtualenv Python (`.venv/`) se não existir
+- Instala `fastapi` e `uvicorn` se necessário
+- Instala dependências npm se `node_modules/` não existir
+- Sobe API mock + frontend em paralelo com logs coloridos
 
 ```bash
-# 3. Frontend Next.js
-cd frontend
-npm install
-npm run dev
-# App rodando em http://localhost:3000
+./run.sh                      # iniciar tudo
+./run.sh --install            # forçar reinstalação de deps
+./run.sh --port-api 9000      # mudar porta da API
+./run.sh --port-web 4000      # mudar porta do frontend
 ```
 
-#### URLs disponíveis
+#### URLs
 
-| Página | URL |
+| Serviço | URL |
 |---|---|
 | Landing | http://localhost:3000 |
 | Dashboard Gestor | http://localhost:3000/gestor |
 | App Cidadão (PWA) | http://localhost:3000/cidadao |
 | Swagger / Docs | http://localhost:8000/docs |
 
-> O mock inclui dados pré-carregados: 4 sobreposições, 6 terminais virtuais, 7 scores de frota, 5 rotas diametrais e o cenário completo da Maria.
-
----
-
-### Modo Completo (Docker + PostgreSQL)
-
-Stack completa com banco real, PostGIS e ETL de dados públicos.
-
-#### Pré-requisitos
-
-- [Docker Desktop](https://docs.docker.com/get-docker/) instalado e rodando
-- Git
-
-#### Passo a passo
-
-```bash
-# 1. Clone e configure variáveis
-git clone https://github.com/FelipeJesusMartins/mobidf-ai.git
-cd mobidf-ai
-cp .env.example .env   # edite conforme necessário
-
-# 2. Suba tudo
-./start.sh             # sobe DB + backend + frontend simultaneamente
-
-# Outras opções:
-./start.sh --build     # força rebuild completo das imagens
-./start.sh --down      # para e remove todos os contêineres
-```
-
-#### Popular com dados reais
-
-Após subir, dispare o ETL GTFS via dashboard ou diretamente:
-
-```bash
-curl -X POST http://localhost:8000/api/v1/gestor/etl/gtfs
-```
-
-O pipeline baixa rotas, paradas, horários e shapes do GTFS-SEMOB/DF, calcula sobreposições via PostGIS e atualiza os scores.
+> O mock inclui dados pré-carregados: 4 sobreposições, 6 terminais virtuais, 7 scores de frota, 5 rotas diametrais e o cenário completo da Maria. Sem banco de dados, sem Docker, sem configuração.
 
 ---
 
@@ -168,8 +114,8 @@ O pipeline baixa rotas, paradas, horários e shapes do GTFS-SEMOB/DF, calcula so
 | **Backend** | Python 3.11, FastAPI, SQLAlchemy (async), APScheduler |
 | **Banco** | PostgreSQL 15 + PostGIS 3.3, particionamento por data |
 | **ETL** | Pandas, psycopg2, protobuf (GTFS-RT), httpx |
-| **Demo** | mock_server.py — FastAPI in-memory, sem dependências externas |
-| **Infra** | Docker Compose (prod) / venv + npm (dev) |
+| **Demo** | mock_server.py — FastAPI in-memory, zero configuração |
+| **Infra** | run.sh — orquestra venv + npm nativamente (sem Docker) |
 | **Dados** | GTFS SEMOB-DF, API IBGE v3, OpenStreetMap |
 
 ---
@@ -179,9 +125,8 @@ O pipeline baixa rotas, paradas, horários e shapes do GTFS-SEMOB/DF, calcula so
 ```
 mobidf-ai/
 │
-├── mock_server.py              ← Backend demo (sem DB, roda isolado)
-├── start.sh                    ← Orquestra Docker Compose + logs
-├── docker-compose.yml
+├── mock_server.py              ← Backend demo (FastAPI in-memory)
+├── run.sh                      ← Inicia API + frontend com um comando
 ├── .env.example
 │
 ├── database/
