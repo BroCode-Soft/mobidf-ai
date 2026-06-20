@@ -2,81 +2,161 @@
 
 > **Mobilidade urbana inteligente para o Distrito Federal — 0% de obras, 100% de dados.**
 
-SaaS B2G que resolve o gargalo logístico do DF utilizando análise geoespacial, sincronização GTFS em tempo real e predição de fluxo — superando a eficiência de sistemas BRT físicos por software.
+SaaS B2G que resolve o gargalo logístico do DF via análise geoespacial, sincronização GTFS em tempo real e predição de fluxo — superando a eficiência de sistemas BRT físicos, por software.
 
 ---
 
 ## Sumário
 
 - [Visão Geral](#visão-geral)
-- [Arquitetura](#arquitetura)
-- [Funcionalidades](#funcionalidades)
-- [Stack Técnica](#stack-técnica)
+- [Algoritmos Centrais](#algoritmos-centrais)
 - [Como Rodar](#como-rodar)
+  - [Modo Mock (sem Docker — recomendado para demo)](#modo-mock-sem-docker--recomendado-para-demo)
+  - [Modo Completo (Docker + PostgreSQL)](#modo-completo-docker--postgresql)
+- [Arquitetura](#arquitetura)
+- [Stack Técnica](#stack-técnica)
 - [Estrutura do Projeto](#estrutura-do-projeto)
 - [API Reference](#api-reference)
-- [Cenário de Validação — Maria](#cenário-de-validação--maria)
-- [ODS ONU Impactados](#ods-onu-impactados)
+- [Cenário Maria](#cenário-de-validação--maria)
+- [ODS ONU](#ods-onu-impactados)
 
 ---
 
 ## Visão Geral
 
-O Distrito Federal concentra **4,6 milhões de habitantes** em 33 Regiões Administrativas com transporte público centralizador: tudo passa pela Rodoviária do Plano Piloto, criando gargalos sistêmicos.
+O DF concentra **4,6 milhões de habitantes** em 33 Regiões Administrativas com transporte centralizador: tudo passa pela Rodoviária do Plano Piloto, criando gargalos sistêmicos.
 
-O MobiDF AI resolve isso com três algoritmos principais:
+O MobiDF AI resolve isso com três algoritmos sobre dados públicos já existentes (GTFS-SEMOB, IBGE, OSM) — sem nenhuma obra ou hardware adicional.
 
-| Algoritmo | O que faz |
+---
+
+## Algoritmos Centrais
+
+| Algoritmo | Problema | Solução |
+|---|---|---|
+| **Terminal Virtual** | Passageiros perdem conexões por falta de sincronização entre linhas | Matchmaking feeder→troncal com tolerância ≤ 3 min via GTFS-RT |
+| **Roteamento Diametral** | Ceilândia → SIA exige 2 baldeações no Plano Piloto | Matriz O/D detecta pares com ≥ 500 viagens/dia sem linha direta |
+| **Corte Fantasma** | Ônibus vazios disputam o mesmo trajeto e horário | PostGIS detecta ≥ 30% de sobreposição geográfica + conflito de schedule |
+
+**Reinvestimento automático:** cada linha cortada gera economia reinvestida em 60% Wi-Fi, 30% AC e 10% reserva operacional.
+
+---
+
+## Como Rodar
+
+### Modo Mock (sem Docker — recomendado para demo)
+
+Roda **100% local** com Python + Node. Sem Docker, sem banco de dados, sem configuração extra.
+
+#### Pré-requisitos
+
+- Python 3.9+
+- Node.js 18+
+
+#### Passo a passo
+
+```bash
+# 1. Clone
+git clone https://github.com/FelipeJesusMartins/mobidf-ai.git
+cd mobidf-ai
+
+# 2. Backend mock (FastAPI com dados em memória)
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install fastapi uvicorn
+
+uvicorn mock_server:app --reload --port 8000
+# API rodando em http://localhost:8000
+# Docs interativos em http://localhost:8000/docs
+```
+
+Abra outro terminal:
+
+```bash
+# 3. Frontend Next.js
+cd frontend
+npm install
+npm run dev
+# App rodando em http://localhost:3000
+```
+
+#### URLs disponíveis
+
+| Página | URL |
 |---|---|
-| **Terminal Virtual** | Sincroniza horários de linhas alimentadoras com troncais (tolerância ≤ 3 min) sem construir terminais físicos |
-| **Roteamento Diametral** | Detecta fluxo pendular massivo (ex: Ceilândia → SIA) e sugere linhas diretas inter-RAs ao gestor |
-| **Corte de Sobreposição Fantasma** | Identifica via PostGIS ônibus vazios no mesmo trajeto e horário, gerando economia direta |
+| Landing | http://localhost:3000 |
+| Dashboard Gestor | http://localhost:3000/gestor |
+| App Cidadão (PWA) | http://localhost:3000/cidadao |
+| Swagger / Docs | http://localhost:8000/docs |
+
+> O mock inclui dados pré-carregados: 4 sobreposições, 6 terminais virtuais, 7 scores de frota, 5 rotas diametrais e o cenário completo da Maria.
+
+---
+
+### Modo Completo (Docker + PostgreSQL)
+
+Stack completa com banco real, PostGIS e ETL de dados públicos.
+
+#### Pré-requisitos
+
+- [Docker Desktop](https://docs.docker.com/get-docker/) instalado e rodando
+- Git
+
+#### Passo a passo
+
+```bash
+# 1. Clone e configure variáveis
+git clone https://github.com/FelipeJesusMartins/mobidf-ai.git
+cd mobidf-ai
+cp .env.example .env   # edite conforme necessário
+
+# 2. Suba tudo
+./start.sh             # sobe DB + backend + frontend simultaneamente
+
+# Outras opções:
+./start.sh --build     # força rebuild completo das imagens
+./start.sh --down      # para e remove todos os contêineres
+```
+
+#### Popular com dados reais
+
+Após subir, dispare o ETL GTFS via dashboard ou diretamente:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/gestor/etl/gtfs
+```
+
+O pipeline baixa rotas, paradas, horários e shapes do GTFS-SEMOB/DF, calcula sobreposições via PostGIS e atualiza os scores.
 
 ---
 
 ## Arquitetura
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        MobiDF AI                            │
-├──────────────┬──────────────────┬───────────────────────────┤
-│   Frontend   │     Backend      │        Banco de Dados      │
-│  Next.js 14  │   FastAPI        │   PostgreSQL + PostGIS     │
-│  Tailwind    │   APScheduler    │   Geometrias geoespaciais  │
-│  PWA         │   Async ETL      │   GTFS completo            │
-└──────────────┴──────────────────┴───────────────────────────┘
-        ↑                ↑                      ↑
-        │          APIs Públicas                │
-        │   GTFS/GTFS-RT (SEMOB-DF)            │
-        │   IBGE Malha Censitária               │
-        │   OpenStreetMap                       │
-        └───────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                          MobiDF AI                              │
+├────────────────┬───────────────────┬────────────────────────────┤
+│   Frontend     │     Backend       │      Banco de Dados        │
+│  Next.js 14    │   FastAPI         │  PostgreSQL 15 + PostGIS   │
+│  Tailwind CSS  │   APScheduler     │  Geometrias GIST-indexed   │
+│  Framer Motion │   SQLAlchemy      │  GTFS completo + partições │
+│  Radix UI      │   Async ETL       │                            │
+└────────────────┴───────────────────┴────────────────────────────┘
+         ↑                  ↑
+         │        Fontes de dados públicos
+         │   GTFS/GTFS-RT — SEMOB-DF (horários, posições)
+         │   API IBGE v3  — Malha censitária das 33 RAs
+         │   OpenStreetMap — Validação geográfica
 ```
 
-**Pipeline ETL (automático via CRON):**
-- `00:30` — GTFS estático (routes, trips, stops, stop_times, shapes)
-- `30s` — GTFS-RT posições em tempo real
-- `domingo 01:00` — IBGE malha censitária por RA
-- `02:00` — Recálculo de sobreposições, scores e matriz O/D
+**Pipeline ETL (agendado via APScheduler):**
 
----
-
-## Funcionalidades
-
-### Dashboard Gestor (SEMOB / B2G)
-
-- **Corte de Sobreposição Fantasma** — detecta rotas com ≥30% de trajeto coincidente e conflito de horário. Cada corte gera economia estimada reinvestida automaticamente.
-- **Reinvestimento Automático** — 60% → Wi-Fi | 30% → Ar-condicionado | 10% → Reserva operacional
-- **Índice de Eficiência de Frota** — Score 0–100: `(Lotação + Sustentabilidade) − Ociosidade`
-- **KPI "Tempo Salvo em Integração Sincronizada"** — métrica exclusiva para validar o Terminal Virtual
-- **Roteamento Diametral** — painel de sugestões ordenado por impacto (horas salvas/dia × viagens/dia)
-
-### App Cidadão (PWA Mobile-first)
-
-- **Busca de paradas** com geocodificação e paradas próximas por GPS
-- **Próximas viagens** com tempo real de chegada e barra de ocupação ao vivo
-- **Reserva de Fluxo (Categoria Expressa)** — check-in digital antes de sair de casa, garantindo assento e alimentando o painel preditivo do gestor
-- **Gestão de reservas** — lista, confirmação e cancelamento
+| Horário | Job |
+|---|---|
+| `00:30` | GTFS estático — routes, trips, stops, stop_times, shapes |
+| `a cada 30s` | GTFS-RT — posições em tempo real dos veículos |
+| `domingo 01:00` | IBGE — malha censitária das Regiões Administrativas |
+| `02:00` | Recálculo — sobreposições, scores de frota e matriz O/D |
 
 ---
 
@@ -84,60 +164,13 @@ O MobiDF AI resolve isso com três algoritmos principais:
 
 | Camada | Tecnologia |
 |---|---|
-| Frontend | Next.js 14, React 18, Tailwind CSS, Recharts, Leaflet |
-| Backend | Python 3.11, FastAPI, SQLAlchemy (async), APScheduler |
-| Banco | PostgreSQL 15 + PostGIS 3.3 |
-| ETL | GTFS-Kit, Pandas, psycopg2, protobuf (GTFS-RT) |
-| Infra | Docker Compose |
-| Dados | GTFS SEMOB-DF, API IBGE, OpenStreetMap |
-
----
-
-## Como Rodar
-
-### Pré-requisitos
-
-- [Docker Desktop](https://docs.docker.com/get-docker/) instalado e rodando
-- Git
-
-### 1. Clone e configure
-
-```bash
-git clone https://github.com/FelipeJesusMartins/mobidf-ai.git
-cd mobidf-ai
-cp .env.example .env   # edite se necessário
-```
-
-### 2. Suba tudo com um comando
-
-```bash
-./start.sh
-```
-
-O script sobe **DB + Backend + Frontend simultaneamente**, aguarda o banco ficar saudável e exibe logs coloridos por serviço em tempo real.
-
-```
-./start.sh           # sobe tudo (imagens já buildadas)
-./start.sh --build   # força rebuild completo
-./start.sh --down    # para e remove todos os contêineres
-```
-
-### 3. Acesse
-
-| Serviço | URL |
-|---|---|
-| **Backend API (Swagger)** | http://localhost:8000/docs |
-| **Dashboard Gestor** | http://localhost:3000/gestor |
-| **App Cidadão** | http://localhost:3000/cidadao |
-| **PostgreSQL** | localhost:5432 (user: `mobidf`) |
-
-### 4. Popular dados reais
-
-Após subir, dispare o ETL GTFS manualmente no Dashboard ou via API:
-
-```bash
-curl -X POST http://localhost:8000/api/v1/gestor/etl/gtfs
-```
+| **Frontend** | Next.js 14, React 18, Tailwind CSS, Framer Motion, Radix UI, Recharts |
+| **Backend** | Python 3.11, FastAPI, SQLAlchemy (async), APScheduler |
+| **Banco** | PostgreSQL 15 + PostGIS 3.3, particionamento por data |
+| **ETL** | Pandas, psycopg2, protobuf (GTFS-RT), httpx |
+| **Demo** | mock_server.py — FastAPI in-memory, sem dependências externas |
+| **Infra** | Docker Compose (prod) / venv + npm (dev) |
+| **Dados** | GTFS SEMOB-DF, API IBGE v3, OpenStreetMap |
 
 ---
 
@@ -145,103 +178,115 @@ curl -X POST http://localhost:8000/api/v1/gestor/etl/gtfs
 
 ```
 mobidf-ai/
-├── start.sh                    # Script único para subir tudo
+│
+├── mock_server.py              ← Backend demo (sem DB, roda isolado)
+├── start.sh                    ← Orquestra Docker Compose + logs
 ├── docker-compose.yml
 ├── .env.example
 │
 ├── database/
-│   ├── 01_extensions.sql       # PostGIS, UUID, pg_trgm
-│   ├── 02_tables.sql           # 14 tabelas GTFS + negócio
-│   ├── 03_indexes.sql          # Índices GIST espaciais + B-tree
-│   └── 04_functions.sql        # Funções PostGIS (overlap, sync, score)
+│   ├── 01_extensions.sql       ← PostGIS, UUID, pg_trgm
+│   ├── 02_tables.sql           ← 14 tabelas (GTFS + negócio)
+│   ├── 03_indexes.sql          ← Índices GIST espaciais + B-tree
+│   └── 04_functions.sql        ← Funções PostGIS core
+│                                  detect_route_overlaps(min_overlap_pct)
+│                                  calc_fleet_score(route_id, date)
+│                                  calc_reinvestment(start, end, cost)
 │
 ├── backend/
 │   └── app/
-│       ├── main.py             # FastAPI + lifespan (scheduler)
-│       ├── config.py
-│       ├── database.py         # SQLAlchemy async engine
-│       ├── models/             # ORM models
+│       ├── main.py             ← FastAPI + lifespan (scheduler init)
 │       ├── etl/
-│       │   ├── gtfs_ingestion.py   # Download + parse + ingestão GTFS
-│       │   ├── ibge_ingestion.py   # Malha censitária por RA
-│       │   └── scheduler.py        # CRON jobs APScheduler
+│       │   ├── gtfs_ingestion.py    ← Download ZIP + parse + bulk insert
+│       │   ├── ibge_ingestion.py    ← Malha censitária 33 RAs
+│       │   └── scheduler.py         ← APScheduler jobs
 │       ├── services/
-│       │   ├── terminal_virtual.py     # Matchmaking alimentadora/troncal
-│       │   ├── overlap_detection.py    # Corte de sobreposição (PostGIS)
-│       │   ├── fleet_score.py          # Índice de eficiência 0–100
-│       │   ├── diametral_routing.py    # Matriz O/D + sugestões diametrais
-│       │   └── reinvestment.py         # Alocação automática de economia
+│       │   ├── terminal_virtual.py  ← Matchmaking feeder/troncal ≤ 3min
+│       │   ├── overlap_detection.py ← Corte fantasma via PostGIS
+│       │   ├── fleet_score.py       ← Score 0-100 por rota
+│       │   ├── diametral_routing.py ← Matriz O/D + sugestões
+│       │   └── reinvestment.py      ← Alocação de economia
 │       └── routers/
-│           ├── gestor.py       # /api/v1/gestor/*
-│           └── cidadao.py      # /api/v1/cidadao/*
+│           ├── gestor.py       ← /api/v1/gestor/*
+│           └── cidadao.py      ← /api/v1/cidadao/*
 │
 └── frontend/
     └── src/
         ├── app/
-        │   ├── page.tsx            # Landing page
-        │   ├── gestor/page.tsx     # Dashboard SEMOB (desktop)
-        │   └── cidadao/page.tsx    # App cidadão (PWA mobile)
-        ├── components/
-        │   ├── gestor/             # KPICard, FleetScore, Overlap, Diametral...
-        │   └── cidadao/            # OccupancyBar
-        └── lib/api.ts              # Client HTTP tipado
+        │   ├── page.tsx            ← Landing (hero animado)
+        │   ├── gestor/page.tsx     ← Mission Control (sidebar + 5 painéis)
+        │   └── cidadao/page.tsx    ← Transit Pulse (PWA mobile-first)
+        └── lib/
+            ├── api.ts              ← HTTP client tipado (todos os endpoints)
+            └── utils.ts            ← cn() helper (clsx + tailwind-merge)
 ```
 
 ---
 
 ## API Reference
 
-Documentação interativa disponível em **http://localhost:8000/docs** (Swagger UI).
+Documentação interativa completa em **http://localhost:8000/docs**.
 
-### Endpoints principais
+### Gestor
 
-#### Gestor
 | Método | Endpoint | Descrição |
 |---|---|---|
 | `GET` | `/api/v1/gestor/dashboard` | Todos os KPIs em uma requisição |
-| `GET` | `/api/v1/gestor/overlaps` | Lista sobreposições ativas |
+| `GET` | `/api/v1/gestor/overlaps` | Lista sobreposições (filtro por status) |
 | `PATCH` | `/api/v1/gestor/overlaps/{id}/resolve` | Corta linha sobreposta |
-| `GET` | `/api/v1/gestor/terminal-virtual/kpi` | KPI Tempo Salvo |
+| `GET` | `/api/v1/gestor/terminal-virtual` | Pares sincronizados |
+| `GET` | `/api/v1/gestor/terminal-virtual/kpi` | KPI tempo salvo |
 | `GET` | `/api/v1/gestor/fleet-scores` | Score de eficiência por rota |
+| `GET` | `/api/v1/gestor/fleet-scores/summary` | Resumo frota (médio, críticos) |
 | `GET` | `/api/v1/gestor/diametral/suggestions` | Sugestões de rotas diametrais |
-| `GET` | `/api/v1/gestor/reinvestment/current` | Reinvestimento do mês |
+| `GET` | `/api/v1/gestor/diametral/od-heatmap` | Heatmap da matriz O/D |
+| `GET` | `/api/v1/gestor/reinvestment/current` | Reinvestimento do mês atual |
+| `GET` | `/api/v1/gestor/reinvestment/history` | Histórico mensal |
 | `POST` | `/api/v1/gestor/etl/gtfs` | Dispara ETL manualmente |
 
-#### Cidadão
+### Cidadão
+
 | Método | Endpoint | Descrição |
 |---|---|---|
 | `GET` | `/api/v1/cidadao/stops/search?q=` | Busca paradas por nome |
 | `GET` | `/api/v1/cidadao/stops/nearby?lat=&lon=` | Paradas próximas por GPS |
-| `GET` | `/api/v1/cidadao/trips/next?origin_stop_id=` | Próximas viagens com ocupação |
+| `GET` | `/api/v1/cidadao/trips/next?origin_stop_id=` | Próximas viagens + ocupação |
+| `GET` | `/api/v1/cidadao/occupancy/{trip_id}` | Ocupação em tempo real |
 | `POST` | `/api/v1/cidadao/reservations` | Reserva de fluxo (Expressa) |
+| `GET` | `/api/v1/cidadao/reservations?user_identifier=` | Lista reservas do usuário |
+| `DELETE` | `/api/v1/cidadao/reservations/{id}` | Cancela reserva |
 | `GET` | `/api/v1/cidadao/demo/maria` | Cenário de teste completo |
 
 ---
 
 ## Cenário de Validação — Maria
 
-> *"Mora em Ceilândia e trabalha no SIA. Gasta 4h por dia e é forçada a fazer baldeação ineficiente no Plano Piloto."*
+> *"Mora em Ceilândia Norte, trabalha no SIA. Gasta 4h por dia em ônibus com 2 baldeações obrigatórias no Plano Piloto."*
 
-| Situação | Tempo | Baldeações |
-|---|---|---|
-| **Atual** | 120 min | 2 (Rodoviária PP obrigatória) |
-| **Com Rota Diametral** | 85 min | 0 (Ceilândia → SIA direto) |
-| **Com Terminal Virtual** | 95 min | 1 (máx. 3 min de espera) |
+| | Situação Atual | Com Rota Diametral | Com Terminal Virtual |
+|---|---|---|---|
+| **Tempo total** | ~120 min | **85 min** | 95 min |
+| **Baldeações** | 2 | 0 | 1 (≤ 3 min espera) |
+| **Tempo salvo/dia** | — | **35 min** | 25 min |
+| **Horas devolvidas/mês** | — | **+12,8h** | +9,2h |
+| **Economia mensal** | — | **R$ 90** | R$ 60 |
 
-**Resultado:** −35 min por trajeto · +12,8h de vida devolvidas por mês · assento garantido via Reserva de Fluxo.
+Teste o cenário completo:
 
-Teste o cenário: `GET /api/v1/cidadao/demo/maria`
+```bash
+curl http://localhost:8000/api/v1/cidadao/demo/maria
+```
 
 ---
 
 ## ODS ONU Impactados
 
-| ODS | Como |
+| ODS | Impacto |
 |---|---|
-| **ODS 11** — Cidades Sustentáveis | Reduz congestionamento e tempo de deslocamento sem obras |
-| **ODS 9** — Inovação | Eficiência BRT por software, sem infraestrutura física |
-| **ODS 10** — Menos Desigualdades | Devolve tempo de vida ao morador de periferia |
-| **ODS 13** — Ação Climática | Reduz uso de carro particular ao tornar o ônibus previsível |
+| **11** Cidades Sustentáveis | Reduz congestionamento e tempo de deslocamento, sem obras |
+| **9** Indústria e Inovação | Eficiência BRT por software — zero infraestrutura física |
+| **10** Menos Desigualdades | Devolve horas de vida ao morador de periferia |
+| **13** Ação Climática | Torna o ônibus previsível, reduzindo uso do carro particular |
 
 ---
 
