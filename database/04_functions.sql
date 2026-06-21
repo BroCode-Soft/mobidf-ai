@@ -92,9 +92,10 @@ BEGIN
         FROM stop_times st
         JOIN trips t ON t.trip_id = st.trip_id
         JOIN routes r ON r.route_id = t.route_id
-        -- alimentadoras: rotas locais (curtas, raio < 15km do centro)
+        JOIN stops s ON s.stop_id = st.stop_id
+        -- alimentadoras: rotas locais (distância > 10km do Plano Piloto)
         WHERE ST_Distance(
-            stops.geom,
+            s.geom::geography,
             ST_SetSRID(ST_MakePoint(-47.9297, -15.7801), 4326)::geography
         ) > 10000
     ),
@@ -106,7 +107,12 @@ BEGIN
             st.departure_time
         FROM stop_times st
         JOIN trips t ON t.trip_id = st.trip_id
-        -- troncais: rotas que passam próximas ao Plano Piloto
+        JOIN stops s ON s.stop_id = st.stop_id
+        -- troncais: rotas que passam próximas ao Plano Piloto (distância <= 10km)
+        WHERE ST_Distance(
+            s.geom::geography,
+            ST_SetSRID(ST_MakePoint(-47.9297, -15.7801), 4326)::geography
+        ) <= 10000
     )
     SELECT
         f.stop_id,
@@ -125,8 +131,7 @@ BEGIN
     FROM feeder_arrivals f
     JOIN trunk_departures tr ON tr.stop_id = f.stop_id
     WHERE tr.departure_time > f.arrival_time
-      AND EXTRACT(EPOCH FROM (tr.departure_time - f.arrival_time)) / 60 <= tolerance_min
-    FROM stops WHERE stop_id = f.stop_id;
+      AND EXTRACT(EPOCH FROM (tr.departure_time - f.arrival_time)) / 60 <= tolerance_min;
 END;
 $$ LANGUAGE plpgsql;
 

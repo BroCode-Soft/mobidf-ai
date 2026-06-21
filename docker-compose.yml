@@ -35,8 +35,7 @@ services:
         VERSION: ${VERSION:-latest}
     container_name: mobidf-backend
     depends_on:
-      postgres:
-        condition: service_healthy
+      - postgres
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-mobidf}:${POSTGRES_PASSWORD:-mobidf_secret}@postgres:5432/${POSTGRES_DB:-mobidf}
       DATABASE_URL_SYNC: postgresql://${POSTGRES_USER:-mobidf}:${POSTGRES_PASSWORD:-mobidf_secret}@postgres:5432/${POSTGRES_DB:-mobidf}
@@ -78,7 +77,6 @@ services:
       NODE_ENV: ${NODE_ENV:-production}
     ports:
       - "${FRONTEND_PORT:-3000}:3000"
-      - "${BACKEND_PORT:-8000}:8000"
     volumes:
       - frontend_cache:/app/.next/cache
     networks:
