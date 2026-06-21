@@ -19,10 +19,12 @@ info() { echo -e "${CS}$*${R}"; }
 PORT_API=8000
 PORT_WEB=3000
 FORCE_INSTALL=0
+USE_MOCK=0
 
 for arg in "$@"; do
   case $arg in
     --install)         FORCE_INSTALL=1 ;;
+    --mock)            USE_MOCK=1 ;;
     --port-api)  shift; PORT_API=$1 ;;
     --port-web)  shift; PORT_WEB=$1 ;;
   esac
@@ -46,9 +48,9 @@ PIP="$VENV/bin/pip"
 UVICORN="$VENV/bin/uvicorn"
 
 if [ ! -f "$UVICORN" ] || [ "$FORCE_INSTALL" = "1" ]; then
-  log "Instalando dependências Python (fastapi, uvicorn)..."
+  log "Instalando dependências Python..."
   "$PIP" install --quiet --upgrade pip
-  "$PIP" install --quiet fastapi "uvicorn[standard]"
+  "$PIP" install --quiet fastapi "uvicorn[standard]" "httpx[http2]"
 fi
 
 # ── Node modules ──────────────────────────────────────────────
@@ -78,9 +80,18 @@ prefix_log() {
   done
 }
 
-# ── Inicia mock API ───────────────────────────────────────────
-log "Iniciando mock API na porta ${PORT_API}..."
-"$UVICORN" mock_server:app \
+# ── Inicia API ────────────────────────────────────────────────
+if [ "$USE_MOCK" = "1" ]; then
+  SERVER_MODULE="mock_server:app"
+  log "Iniciando mock server (offline) na porta ${PORT_API}..."
+else
+  SERVER_MODULE="real_server:app"
+  log "Iniciando servidor com dados reais SEMOB/DF na porta ${PORT_API}..."
+  log "  → Paradas:  geoserver.semob.df.gov.br (WFS)"
+  log "  → Posições: GPS tempo real (WFS, atualiza a cada 30s)"
+  log "  → Horários: GTFS DFTRANS (dfnoponto.semob.df.gov.br)"
+fi
+"$UVICORN" "$SERVER_MODULE" \
   --host 0.0.0.0 --port "$PORT_API" \
   --log-level warning \
   2>&1 | prefix_log "api" "$CA" &
@@ -104,15 +115,24 @@ PID_WEB=$!
 # ── Banner ────────────────────────────────────────────────────
 sleep 2
 echo ""
+if [ "$USE_MOCK" = "1" ]; then
+  MODE_LABEL="mock (offline)"
+else
+  MODE_LABEL="dados reais SEMOB/DF"
+fi
 echo -e "${CS}${B}┌───────────────────────────────────────────────┐${R}"
 echo -e "${CS}${B}│            MobiDF AI — Rodando!               │${R}"
 echo -e "${CS}${B}├───────────────────────────────────────────────┤${R}"
+echo -e "${CS}│${R}  Modo:           ${CA}${MODE_LABEL}${R}"
 echo -e "${CS}│${R}  ${CA}API / Swagger${R}   http://localhost:${PORT_API}/docs       "
 echo -e "${CS}│${R}  ${CF}Landing${R}         http://localhost:${PORT_WEB}              "
 echo -e "${CS}│${R}  ${CF}Gestor SEMOB${R}    http://localhost:${PORT_WEB}/gestor       "
 echo -e "${CS}│${R}  ${CF}App Cidadão${R}     http://localhost:${PORT_WEB}/cidadao      "
+echo -e "${CS}│${R}  ${CF}Controle Frota${R}  http://localhost:${PORT_WEB}/gestora      "
+echo -e "${CS}│${R}  ${CF}Pitch 3 min${R}    http://localhost:${PORT_WEB}/pitch        "
 echo -e "${CS}${B}├───────────────────────────────────────────────┤${R}"
 echo -e "${CS}│${R}  Ctrl+C para parar tudo                        "
+echo -e "${CS}│${R}  ${CA}./run.sh --mock${R}   para rodar offline        "
 echo -e "${CS}${B}└───────────────────────────────────────────────┘${R}"
 echo ""
 

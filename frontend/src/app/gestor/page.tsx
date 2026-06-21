@@ -1,13 +1,25 @@
 "use client";
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
+import Logo from "@/components/ui/Logo";
 import { motion, AnimatePresence } from "framer-motion";
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
-import { api, type GestorDashboard, type Overlap, type VirtualTerminal, type ReinvestmentMonth, type FleetScore, type DiametralSuggestion } from "@/lib/api";
+import { api, type GestorDashboard, type Overlap, type VirtualTerminal, type ReinvestmentMonth, type FleetScore, type DiametralSuggestion, type Regiao } from "@/lib/api";
 
 const ease: [number,number,number,number] = [0.16, 1, 0.3, 1];
 const fmt = (v?: number) => `R$ ${Number(v ?? 0).toLocaleString("pt-BR", { minimumFractionDigits: 0 })}`;
 const scoreColor = (s: number) => s >= 70 ? "var(--jade)" : s >= 40 ? "var(--gold)" : "var(--coral)";
+
+function useIsMobile() {
+  const [m, setM] = useState(false);
+  useEffect(() => {
+    const fn = () => setM(window.innerWidth < 768);
+    fn();
+    window.addEventListener("resize", fn);
+    return () => window.removeEventListener("resize", fn);
+  }, []);
+  return m;
+}
 
 /* ── Animated metric ── */
 function Metric({ value, label, sub, color = "var(--t1)", unit = "" }: {
@@ -15,7 +27,7 @@ function Metric({ value, label, sub, color = "var(--t1)", unit = "" }: {
 }) {
   return (
     <div>
-      <div style={{ fontSize: 36, fontWeight: 900, letterSpacing: "-0.04em", color, lineHeight: 1.1 }}>
+      <div style={{ fontSize: "clamp(22px, 5vw, 36px)", fontWeight: 900, letterSpacing: "-0.04em", color, lineHeight: 1.1 }}>
         {value}{unit}
       </div>
       <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--t3)", marginTop: 4 }}>{label}</div>
@@ -54,25 +66,33 @@ type TabId = typeof NAV[number]["id"];
    PAGE
 ══════════════════════════════════════════════ */
 export default function GestorPage() {
+  const m = useIsMobile();
   const [dash, setDash] = useState<GestorDashboard | null>(null);
   const [overlaps, setOverlaps] = useState<Overlap[]>([]);
   const [terminals, setTerminals] = useState<VirtualTerminal[]>([]);
   const [history, setHistory] = useState<ReinvestmentMonth[]>([]);
   const [scores, setScores] = useState<FleetScore[]>([]);
+  const [diametrals, setDiametrals] = useState<DiametralSuggestion[]>([]);
+  const [regioes, setRegioes] = useState<Regiao[]>([]);
   const [tab, setTab] = useState<TabId>("overview");
   const [resolving, setResolving] = useState<string|null>(null);
   const [etlRunning, setEtlRunning] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string|null>(null);
+  const [criarLinha, setCriarLinha] = useState<{ origem: string; destino: string } | null>(null);
+  const [novaOrigem, setNovaOrigem] = useState("");
+  const [novaDestino, setNovaDestino] = useState("");
 
   const load = useCallback(async () => {
     try {
-      const [d, ovs, terms, hist, sc] = await Promise.all([
+      const [d, ovs, terms, hist, sc, dias, ras] = await Promise.all([
         api.gestor.dashboard(), api.gestor.overlaps(),
         api.gestor.terminalVirtual(), api.gestor.reinvestmentHistory(),
-        api.gestor.fleetScores(),
+        api.gestor.fleetScores(), api.gestor.diametralSuggestions(),
+        api.gestor.regioesAdministrativas(),
       ]);
       setDash(d); setOverlaps(ovs); setTerminals(terms); setHistory(hist); setScores(sc);
+      setDiametrals(dias); setRegioes(ras);
       setError(null);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Erro");
@@ -104,12 +124,9 @@ export default function GestorPage() {
         className="hidden lg:flex">
 
         {/* Logo */}
-        <div style={{ display:"flex", alignItems:"center", gap:10, padding:"4px 8px 20px" }}>
-          <div style={{ width:32, height:32, borderRadius:10, background:"linear-gradient(135deg,#7c3aed,#6366f1)", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:900, fontSize:13, color:"#fff", boxShadow:"0 0 16px rgba(99,102,241,0.4)" }}>M</div>
-          <div>
-            <div style={{ fontSize:13, fontWeight:800, color:"var(--t1)" }}>MobiDF AI</div>
-            <div style={{ fontSize:10, color:"var(--t3)" }}>SEMOB · DF</div>
-          </div>
+        <div style={{ padding:"4px 8px 20px" }}>
+          <Logo variant="full" height={28} />
+          <div style={{ fontSize:10, color:"var(--t3)", marginTop:4, paddingLeft:2 }}>SEMOB · DF</div>
         </div>
 
         <div style={{ fontSize:10, fontWeight:700, color:"var(--t3)", textTransform:"uppercase", letterSpacing:"0.1em", padding:"0 8px", marginBottom:4 }}>Painel</div>
@@ -134,21 +151,23 @@ export default function GestorPage() {
       <div style={{ flex:1, display:"flex", flexDirection:"column", minWidth:0 }}>
 
         {/* Top bar */}
-        <header style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"14px 24px", borderBottom:"1px solid var(--b1)", background:"var(--s1)", flexShrink:0 }}>
-          <div>
-            <div style={{ fontSize:16, fontWeight:800, color:"var(--t1)" }}>
+        <header style={{ display:"flex", alignItems:"center", justifyContent:"space-between",
+          padding: m ? "12px 14px" : "14px 24px",
+          borderBottom:"1px solid var(--b1)", background:"var(--s1)", flexShrink:0, gap:10 }}>
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={{ fontSize: m ? 14 : 16, fontWeight:800, color:"var(--t1)",
+              overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
               {NAV.find(n => n.id === tab)?.label}
             </div>
             <div style={{ display:"flex", alignItems:"center", gap:6, marginTop:2 }}>
               <span className="live" />
-              <span style={{ fontSize:11, color:"var(--t3)" }}>Ao vivo · atualiza 30s</span>
+              <span style={{ fontSize:11, color:"var(--t3)" }}>Ao vivo · 30s</span>
             </div>
           </div>
-          <div style={{ display:"flex", gap:8 }}>
-            <button onClick={runEtl} disabled={etlRunning} className="btn-ghost" style={{ fontSize:12 }}>
-              {etlRunning ? "⟳ Executando..." : "▶ ETL GTFS"}
-            </button>
-          </div>
+          <button onClick={runEtl} disabled={etlRunning} className="btn-ghost"
+            style={{ fontSize:11, flexShrink:0 }}>
+            {etlRunning ? "⟳ ETL..." : "▶ ETL"}
+          </button>
         </header>
 
         {/* Mobile tab strip */}
@@ -165,7 +184,7 @@ export default function GestorPage() {
         </div>
 
         {/* Content */}
-        <div style={{ flex:1, overflow:"auto", padding:"24px" }}>
+        <div style={{ flex:1, overflow:"auto", padding: m ? "14px 12px" : "24px" }}>
 
           {loading && (
             <div style={{ display:"flex", alignItems:"center", justifyContent:"center", height:300 }}>
@@ -210,7 +229,7 @@ export default function GestorPage() {
                   </div>
 
                   {/* Charts row */}
-                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:20 }}>
+                  <div style={{ display:"grid", gridTemplateColumns: m ? "1fr" : "1fr 1fr", gap:20 }}>
 
                     {/* Reinvestimento */}
                     <div className="panel" style={{ padding:24 }}>
@@ -218,7 +237,7 @@ export default function GestorPage() {
                         <div style={{ fontSize:14, fontWeight:700, color:"var(--t1)" }}>Reinvestimento Automático</div>
                         <div style={{ fontSize:11, color:"var(--t3)", marginTop:2 }}>Economia reinvestida em conforto da frota</div>
                       </div>
-                      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10, marginBottom:20 }}>
+                      <div style={{ display:"grid", gridTemplateColumns: m ? "1fr 1fr" : "1fr 1fr 1fr", gap:10, marginBottom:20 }}>
                         {[
                           { l:"Wi-Fi 60%", v: fmt(dash?.reinvestment.wifi_mes), c:"var(--volt)" },
                           { l:"AC 30%", v: fmt(dash?.reinvestment.ac_mes), c:"var(--jade)" },
@@ -276,20 +295,21 @@ export default function GestorPage() {
                   </div>
 
                   {/* Cenário Maria */}
-                  <div className="panel" style={{ padding:28, position:"relative", overflow:"hidden" }}>
+                  <div className="panel" style={{ padding: m ? "18px 16px" : 28, position:"relative", overflow:"hidden" }}>
                     <div style={{ position:"absolute", top:0, right:0, width:300, height:300, borderRadius:"50%", background:"radial-gradient(circle,rgba(99,102,241,0.12),transparent 70%)", pointerEvents:"none" }} />
                     <div className="badge-volt" style={{ marginBottom:12, fontSize:10, letterSpacing:"0.1em", textTransform:"uppercase" }}>Cenário de validação</div>
-                    <div style={{ fontSize:22, fontWeight:900, color:"var(--t1)", marginBottom:20, letterSpacing:"-0.02em" }}>Maria · Ceilândia → SIA · −35 min/dia</div>
-                    <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:16 }}>
+                    <div style={{ fontSize: m ? 15 : 22, fontWeight:900, color:"var(--t1)", marginBottom: m ? 14 : 20, letterSpacing:"-0.02em" }}>Maria · Ceilândia → SIA · −35 min/dia</div>
+                    <div style={{ display:"grid", gridTemplateColumns: m ? "1fr" : "repeat(3,1fr)", gap: m ? 10 : 16 }}>
                       {[
                         { label:"Situação atual", value:"4h/dia", sub:"2 baldeações", color:"var(--coral)" },
                         { label:"Com rota diametral", value:"−35 min", sub:"sem baldeação", color:"var(--jade)" },
                         { label:"Impacto mensal", value:"+12.8h", sub:"de vida devolvida", color:"var(--gold)" },
                       ].map(s => (
-                        <div key={s.label} style={{ background:"var(--s3)", border:"1px solid var(--b1)", borderRadius:16, padding:"18px 16px" }}>
-                          <div style={{ fontSize:11, color:"var(--t3)", marginBottom:8, textTransform:"uppercase", letterSpacing:"0.08em", fontWeight:700 }}>{s.label}</div>
-                          <div style={{ fontSize:28, fontWeight:900, color: s.color, letterSpacing:"-0.03em" }}>{s.value}</div>
-                          <div style={{ fontSize:12, color:"var(--t2)", marginTop:4 }}>{s.sub}</div>
+                        <div key={s.label} style={{ background:"var(--s3)", border:"1px solid var(--b1)", borderRadius:14, padding: m ? "12px 14px" : "18px 16px",
+                          display: m ? "flex" : "block", alignItems: m ? "center" : undefined, gap: m ? 12 : undefined }}>
+                          <div style={{ fontSize:10, color:"var(--t3)", marginBottom: m ? 0 : 8, textTransform:"uppercase", letterSpacing:"0.08em", fontWeight:700, flex: m ? 1 : undefined }}>{s.label}</div>
+                          <div style={{ fontSize: m ? 20 : 28, fontWeight:900, color: s.color, letterSpacing:"-0.03em" }}>{s.value}</div>
+                          {!m && <div style={{ fontSize:12, color:"var(--t2)", marginTop:4 }}>{s.sub}</div>}
                         </div>
                       ))}
                     </div>
@@ -327,10 +347,11 @@ export default function GestorPage() {
                     {activeOvs.map((o, i) => (
                       <motion.div key={o.id}
                         initial={{ opacity:0, x:12 }} animate={{ opacity:1, x:0 }} transition={{ delay: i*0.05 }}
-                        style={{ display:"flex", alignItems:"center", gap:16, padding:"16px 24px", borderBottom:"1px solid var(--b1)" }}>
+                        style={{ display:"flex", flexDirection: m ? "column" : "row", alignItems: m ? "flex-start" : "center",
+                          gap: m ? 10 : 16, padding: m ? "14px 16px" : "16px 24px", borderBottom:"1px solid var(--b1)" }}>
                         <div style={{ flex:1, minWidth:0 }}>
                           <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", marginBottom:6 }}>
-                            <span style={{ fontSize:14, fontWeight:700, color:"var(--t1)" }}>{o.nome_a} ↔ {o.nome_b}</span>
+                            <span style={{ fontSize: m ? 13 : 14, fontWeight:700, color:"var(--t1)" }}>{o.nome_a} ↔ {o.nome_b}</span>
                             <span className="badge-coral">{o.overlap_pct?.toFixed(0)}% overlap</span>
                             <span className="badge-gold">{o.overlap_km?.toFixed(1)} km</span>
                           </div>
@@ -338,7 +359,8 @@ export default function GestorPage() {
                             Economia: <span style={{ color:"var(--jade)", fontWeight:700 }}>{fmt(o.economia_estimada_mensal)}/mês</span>
                           </div>
                         </div>
-                        <button onClick={() => resolve(o.id)} disabled={resolving === o.id} className="btn-danger" style={{ fontSize:12, flexShrink:0 }}>
+                        <button onClick={() => resolve(o.id)} disabled={resolving === o.id} className="btn-danger"
+                          style={{ fontSize:12, flexShrink:0, width: m ? "100%" : "auto" }}>
                           {resolving === o.id ? "..." : "Cortar linha"}
                         </button>
                       </motion.div>
@@ -379,10 +401,18 @@ export default function GestorPage() {
                       return (
                         <motion.div key={s.route_id}
                           initial={{ opacity:0, x:12 }} animate={{ opacity:1, x:0 }} transition={{ delay: i*0.04 }}
-                          style={{ display:"flex", alignItems:"center", gap:16, padding:"14px 24px", borderBottom:"1px solid var(--b1)" }}>
-                          <ScoreRing score={sc} />
+                          style={{ display:"flex", alignItems:"center", gap: m ? 12 : 16,
+                            padding: m ? "12px 16px" : "14px 24px", borderBottom:"1px solid var(--b1)" }}>
+                          {!m && <ScoreRing score={sc} />}
                           <div style={{ flex:1, minWidth:0 }}>
-                            <div style={{ fontSize:14, fontWeight:700, color:"var(--t1)", marginBottom:4 }}>{s.nome} — {s.descricao}</div>
+                            <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:4 }}>
+                              {m && (
+                                <div style={{ width:32, height:32, borderRadius:8, flexShrink:0, fontSize:11, fontWeight:800,
+                                  color: scoreColor(sc), background:`${scoreColor(sc)}18`, border:`1px solid ${scoreColor(sc)}30`,
+                                  display:"flex", alignItems:"center", justifyContent:"center" }}>{sc}</div>
+                              )}
+                              <div style={{ fontSize: m ? 13 : 14, fontWeight:700, color:"var(--t1)" }}>{s.nome} — {s.descricao}</div>
+                            </div>
                             <div style={{ height:4, background:"var(--s4)", borderRadius:99, overflow:"hidden" }}>
                               <div style={{ height:"100%", width:`${sc}%`, background: scoreColor(sc), borderRadius:99, transition:"width 0.6s cubic-bezier(0.4,0,0.2,1)" }} />
                             </div>
@@ -391,10 +421,6 @@ export default function GestorPage() {
                               <span style={{ fontSize:10, color:"var(--t3)" }}>Sustent.: <b style={{ color:"var(--jade)" }}>{s.sustentabilidade_score?.toFixed(0)}</b></span>
                               <span style={{ fontSize:10, color:"var(--t3)" }}>Ociosa: <b style={{ color:"var(--coral)" }}>−{s.ociosidade_penalty?.toFixed(0)}</b></span>
                             </div>
-                          </div>
-                          <div style={{ textAlign:"right", flexShrink:0 }}>
-                            <div style={{ fontSize:14, fontWeight:700, color:"var(--t2)" }}>{s.reservations_count}</div>
-                            <div style={{ fontSize:10, color:"var(--t3)" }}>reservas</div>
                           </div>
                         </motion.div>
                       );
@@ -407,32 +433,49 @@ export default function GestorPage() {
               {/* ══════ DIAMETRAL ══════ */}
               {tab === "diametral" && !loading && (
                 <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
-                  <div className="panel-volt" style={{ padding:"16px 20px" }}>
-                    <p style={{ fontSize:13, color:"var(--t2)", lineHeight:1.6 }}>
-                      Pares de RAs com alto fluxo pendular e <strong style={{ color:"var(--t1)" }}>sem linha direta</strong> detectados via matriz O/D.
-                      Eliminam a baldeação obrigatória na Rodoviária do Plano Piloto.
-                    </p>
+                  <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:12 }}>
+                    <div className="panel-volt" style={{ padding:"14px 18px", flex:1, minWidth:260 }}>
+                      <p style={{ fontSize:13, color:"var(--t2)", lineHeight:1.6, margin:0 }}>
+                        Pares de RAs com alto fluxo pendular e <strong style={{ color:"var(--t1)" }}>sem linha direta</strong> detectados via matriz O/D.
+                        Eliminam a baldeação obrigatória na Rodoviária do Plano Piloto.
+                      </p>
+                    </div>
+                    <button
+                      className="btn-volt"
+                      style={{ fontSize:12, flexShrink:0 }}
+                      onClick={() => { setNovaOrigem(""); setNovaDestino(""); setCriarLinha({ origem:"", destino:"" }); }}>
+                      + Nova rota diametral
+                    </button>
                   </div>
+
                   <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
-                    {(dash?.top_diametral ?? []).map((s, i) => (
+                    {diametrals.map((s, i) => (
                       <motion.div key={s.id}
-                        initial={{ opacity:0, y:12 }} animate={{ opacity:1, y:0 }} transition={{ delay: i*0.07 }}
-                        className="panel" style={{ padding:"20px 24px", display:"flex", alignItems:"center", gap:20 }}>
-                        <div style={{ width:64, height:64, borderRadius:16, background:"rgba(139,92,246,0.12)", border:"1px solid rgba(139,92,246,0.2)", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
-                          <span style={{ fontSize:24 }}>↗</span>
-                        </div>
-                        <div style={{ flex:1 }}>
-                          <div style={{ fontSize:16, fontWeight:800, color:"var(--t1)", letterSpacing:"-0.02em" }}>{s.origem} → {s.destino}</div>
-                          <div style={{ display:"flex", gap:12, marginTop:8, flexWrap:"wrap" }}>
-                            <span className="badge-muted">{s.trips_daily.toLocaleString("pt-BR")} viagens/dia</span>
-                            <span className="badge-jade">−{s.time_saved_min} min por trajeto</span>
-                            <span className="badge-gold">{s.horas_salvas_dia?.toFixed(0)}h salvas/dia</span>
+                        initial={{ opacity:0, y:12 }} animate={{ opacity:1, y:0 }} transition={{ delay: i*0.05 }}
+                        className="panel" style={{ padding: m ? "16px" : "20px 24px", display:"flex",
+                          flexDirection: m ? "column" : "row", alignItems: m ? "flex-start" : "center", gap: m ? 12 : 20 }}>
+                        <div style={{ display:"flex", alignItems:"center", gap:14, width:"100%" }}>
+                          {!m && <div style={{ width:56, height:56, borderRadius:14, background:"rgba(139,92,246,0.12)", border:"1px solid rgba(139,92,246,0.2)", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+                            <span style={{ fontSize:20 }}>↗</span>
+                          </div>}
+                          <div style={{ flex:1, minWidth:0 }}>
+                            <div style={{ fontSize: m ? 14 : 15, fontWeight:800, color:"var(--t1)", letterSpacing:"-0.02em" }}>{s.origem} → {s.destino}</div>
+                            <div style={{ display:"flex", gap:8, marginTop:8, flexWrap:"wrap" }}>
+                              <span className="badge-muted">{s.trips_daily.toLocaleString("pt-BR")} viagens/dia</span>
+                              <span className="badge-jade">−{s.time_saved_min} min</span>
+                              <span className="badge-gold">{s.horas_salvas_dia?.toFixed(0)}h salvas/dia</span>
+                            </div>
                           </div>
                         </div>
-                        <button className="btn-volt" style={{ fontSize:12, flexShrink:0 }}>Criar linha</button>
+                        <button
+                          className="btn-volt"
+                          style={{ fontSize:12, flexShrink:0, width: m ? "100%" : "auto" }}
+                          onClick={() => { setNovaOrigem(s.origem); setNovaDestino(s.destino); setCriarLinha({ origem: s.origem, destino: s.destino }); }}>
+                          Criar linha
+                        </button>
                       </motion.div>
                     ))}
-                    {(dash?.top_diametral ?? []).length === 0 && <div style={{ padding:"48px 24px", textAlign:"center", color:"var(--t3)", fontSize:13 }}>Acumule reservas para detectar padrões O/D.</div>}
+                    {diametrals.length === 0 && <div style={{ padding:"48px 24px", textAlign:"center", color:"var(--t3)", fontSize:13 }}>Acumule reservas para detectar padrões O/D.</div>}
                   </div>
                 </div>
               )}
@@ -465,17 +508,18 @@ export default function GestorPage() {
                       return (
                         <motion.div key={t.id}
                           initial={{ opacity:0, x:12 }} animate={{ opacity:1, x:0 }} transition={{ delay: i*0.04 }}
-                          style={{ display:"flex", alignItems:"center", gap:14, padding:"14px 24px", borderBottom:"1px solid var(--b1)" }}>
-                          <div style={{ width:44, height:44, borderRadius:12, display:"flex", alignItems:"center", justifyContent:"center", fontSize:13, fontWeight:800, color: c, background:`${c}18`, border:`1px solid ${c}30`, flexShrink:0 }}>
+                          style={{ display:"flex", alignItems:"center", gap:12,
+                            padding: m ? "12px 16px" : "14px 24px", borderBottom:"1px solid var(--b1)" }}>
+                          <div style={{ width:40, height:40, borderRadius:10, display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, fontWeight:800, color: c, background:`${c}18`, border:`1px solid ${c}30`, flexShrink:0 }}>
                             {sc}
                           </div>
                           <div style={{ flex:1, minWidth:0 }}>
-                            <div style={{ fontSize:13, fontWeight:700, color:"var(--t1)", marginBottom:2 }}>{t.stop_name}</div>
-                            <div style={{ fontSize:11, color:"var(--t3)" }}>{t.feeder_nome} → {t.trunk_nome}</div>
+                            <div style={{ fontSize: m ? 12 : 13, fontWeight:700, color:"var(--t1)", marginBottom:2 }}>{t.stop_name}</div>
+                            <div style={{ fontSize:11, color:"var(--t3)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{t.feeder_nome} → {t.trunk_nome}</div>
                           </div>
                           <div style={{ textAlign:"right", flexShrink:0 }}>
                             <div style={{ fontSize:15, fontWeight:800, color: c }}>{Number(t.wait_min).toFixed(1)}</div>
-                            <div style={{ fontSize:10, color:"var(--t3)" }}>min espera</div>
+                            <div style={{ fontSize:10, color:"var(--t3)" }}>min</div>
                           </div>
                         </motion.div>
                       );
@@ -488,6 +532,75 @@ export default function GestorPage() {
           </AnimatePresence>
         </div>
       </div>
+
+      {/* ── MODAL CRIAR LINHA DIAMETRAL ── */}
+      <AnimatePresence>
+        {criarLinha !== null && (
+          <motion.div
+            initial={{ opacity:0 }} animate={{ opacity:1 }} exit={{ opacity:0 }}
+            style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.6)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:999, padding:16 }}
+            onClick={() => setCriarLinha(null)}>
+            <motion.div
+              initial={{ scale:0.92, y:24 }} animate={{ scale:1, y:0 }} exit={{ scale:0.92, y:24 }}
+              transition={{ duration:0.25, ease }}
+              style={{ background:"var(--s2)", border:"1px solid var(--b1)", borderRadius:20, padding:32, width:"100%", maxWidth:480 }}
+              onClick={e => e.stopPropagation()}>
+              <div style={{ fontSize:18, fontWeight:800, color:"var(--t1)", marginBottom:4 }}>Nova Rota Diametral</div>
+              <div style={{ fontSize:12, color:"var(--t3)", marginBottom:24 }}>Selecione origem e destino entre as 33 Regiões Administrativas do DF</div>
+
+              <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+                <div>
+                  <label style={{ fontSize:11, fontWeight:700, color:"var(--t3)", textTransform:"uppercase", letterSpacing:"0.08em", display:"block", marginBottom:6 }}>Origem (RA)</label>
+                  <select
+                    value={novaOrigem}
+                    onChange={e => setNovaOrigem(e.target.value)}
+                    style={{ width:"100%", padding:"10px 14px", borderRadius:10, background:"var(--s3)", border:"1px solid var(--b1)", color:"var(--t1)", fontSize:14 }}>
+                    <option value="">Selecione a RA de origem…</option>
+                    {regioes.map(r => (
+                      <option key={r.ra_id} value={r.nome}>{r.nome} ({r.ra_id})</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label style={{ fontSize:11, fontWeight:700, color:"var(--t3)", textTransform:"uppercase", letterSpacing:"0.08em", display:"block", marginBottom:6 }}>Destino (RA)</label>
+                  <select
+                    value={novaDestino}
+                    onChange={e => setNovaDestino(e.target.value)}
+                    style={{ width:"100%", padding:"10px 14px", borderRadius:10, background:"var(--s3)", border:"1px solid var(--b1)", color:"var(--t1)", fontSize:14 }}>
+                    <option value="">Selecione a RA de destino…</option>
+                    {regioes.filter(r => r.nome !== novaOrigem).map(r => (
+                      <option key={r.ra_id} value={r.nome}>{r.nome} ({r.ra_id})</option>
+                    ))}
+                  </select>
+                </div>
+
+                {novaOrigem && novaDestino && (
+                  <motion.div
+                    initial={{ opacity:0, y:8 }} animate={{ opacity:1, y:0 }}
+                    style={{ padding:"12px 16px", borderRadius:12, background:"rgba(139,92,246,0.1)", border:"1px solid rgba(139,92,246,0.2)", fontSize:13, color:"var(--t2)" }}>
+                    Rota proposta: <strong style={{ color:"var(--t1)" }}>{novaOrigem} → {novaDestino}</strong>
+                    <br /><span style={{ fontSize:11, color:"var(--t3)" }}>Será encaminhada para análise operacional da SEMOB.</span>
+                  </motion.div>
+                )}
+              </div>
+
+              <div style={{ display:"flex", gap:10, marginTop:24, justifyContent:"flex-end" }}>
+                <button className="btn-ghost" style={{ fontSize:13 }} onClick={() => setCriarLinha(null)}>Cancelar</button>
+                <button
+                  className="btn-volt"
+                  style={{ fontSize:13 }}
+                  disabled={!novaOrigem || !novaDestino}
+                  onClick={() => {
+                    alert(`Rota ${novaOrigem} → ${novaDestino} encaminhada para análise.`);
+                    setCriarLinha(null);
+                  }}>
+                  Propor rota
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>

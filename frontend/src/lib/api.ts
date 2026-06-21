@@ -25,6 +25,7 @@ export const api = {
     terminalKpi: () => apiFetch<TerminalKpi>("/gestor/terminal-virtual/kpi"),
     fleetScores: (limit = 50) => apiFetch<FleetScore[]>(`/gestor/fleet-scores?limit=${limit}`),
     fleetSummary: () => apiFetch<FleetSummary>("/gestor/fleet-scores/summary"),
+    regioesAdministrativas: () => apiFetch<Regiao[]>("/gestor/regioes-administrativas"),
     diametralSuggestions: () => apiFetch<DiametralSuggestion[]>("/gestor/diametral/suggestions"),
     odHeatmap: () => apiFetch<OdRow[]>("/gestor/diametral/od-heatmap"),
     reinvestmentCurrent: () => apiFetch<ReinvestmentCurrent>("/gestor/reinvestment/current"),
@@ -32,10 +33,24 @@ export const api = {
       apiFetch<ReinvestmentMonth[]>(`/gestor/reinvestment/history?months=${months}`),
     triggerEtl: () => apiFetch("/gestor/etl/gtfs", { method: "POST" }),
   },
+  gestora2: {
+    vehiclesLive: () => apiFetch<VehiclePosition[]>("/gestora/vehicles/live"),
+    density: () => apiFetch<DensityCell[]>("/gestora/fleet/density"),
+    listEvents: () => apiFetch<GestoraEvent[]>("/gestora/events"),
+    createEvent: (body: EventIn) =>
+      apiFetch<GestoraEvent>("/gestora/events", { method: "POST", body: JSON.stringify(body) }),
+    deleteEvent: (id: string) =>
+      apiFetch(`/gestora/events/${id}`, { method: "DELETE" }),
+    suggest: (eventId: string) =>
+      apiFetch<SuggestResult>(`/gestora/fleet/suggest/${eventId}`),
+  },
   cidadao: {
     searchStops: (q: string) => apiFetch<Stop[]>(`/cidadao/stops/search?q=${encodeURIComponent(q)}`),
-    nearbyStops: (lat: number, lon: number) =>
-      apiFetch<Stop[]>(`/cidadao/stops/nearby?lat=${lat}&lon=${lon}`),
+    nearbyStops: (lat: number, lon: number, radiusM = 2000) =>
+      apiFetch<Stop[]>(`/cidadao/stops/nearby?lat=${lat}&lon=${lon}&radius_m=${radiusM}`),
+    metroStations: () => apiFetch<Stop[]>("/cidadao/stops/metro"),
+    allStopsMap: () => apiFetch<Stop[]>("/cidadao/stops/all-map"),
+    metroLines: () => apiFetch<MetroLineSegment[]>("/cidadao/metro/lines"),
     nextTrips: (originStopId: string) =>
       apiFetch<NextTrip[]>(`/cidadao/trips/next?origin_stop_id=${originStopId}`),
     occupancy: (tripId: string) => apiFetch<Occupancy>(`/cidadao/occupancy/${tripId}`),
@@ -52,6 +67,7 @@ export const api = {
         body: JSON.stringify({ user_identifier: userIdentifier }),
       }),
     demoMaria: () => apiFetch<DemoMaria>("/cidadao/demo/maria"),
+    cartaoSaldo: (numero: string) => apiFetch<CartaoSaldo>(`/cidadao/cartao/${encodeURIComponent(numero)}/saldo`),
   },
 };
 
@@ -124,6 +140,12 @@ export interface FleetSummary {
   rotas_criticas: number;
 }
 
+export interface Regiao {
+  ra_id: string;
+  nome: string;
+  populacao: number;
+}
+
 export interface DiametralSuggestion {
   id: string;
   origem: string;
@@ -159,24 +181,63 @@ export interface ReinvestmentMonth {
   overlap_routes_corrigidas: number;
 }
 
+export interface MetroLineSegment {
+  linha: "ceilandia" | "samambaia" | "ceilandia,samambaia";
+  cor: string;
+  coords: [number, number][];  // [[lat, lon], ...]
+}
+
 export interface Stop {
   stop_id: string;
   stop_name: string;
   stop_lat: number;
   stop_lon: number;
   dist_m?: number;
+  type?: "bus" | "metro";
+  ativo?: boolean;        // false = em construção / inativo (metrô WFS)
+  linha_metro?: string;
+  cor_metro?: string;
+  freq_pico?: number;
+  freq_normal?: number;
+  terminus_a?: string;
+  terminus_b?: string;
 }
 
 export interface NextTrip {
   trip_id: string;
   route_id: string;
   linha: string;
+  descricao?: string;
+  tipo?: string;
   destino: string;
   departure_time: string;
   minutos_para_chegada: number;
   reservas_ativas: number;
   ocupacao_pct: number;
   nivel_ocupacao: "vazio" | "moderado" | "lotado";
+  recomendado?: boolean;
+  fonte?: "gtfs_oficial" | "tempo_real" | "horario_oficial" | string;
+  posicao_gps?: { lat: number; lon: number; distancia_m: number } | null;
+  cor_metro?: string;
+  linha_metro?: string;
+  freq_min?: number;
+}
+
+export interface CartaoViagem {
+  data: string;
+  linha: string;
+  descricao: string;
+  valor: number;
+}
+
+export interface CartaoSaldo {
+  numero: string;
+  nome_titular: string;
+  saldo: number;
+  validade: string;
+  status: string;
+  ultimas_viagens: CartaoViagem[];
+  nota: string;
 }
 
 export interface Occupancy {
@@ -214,6 +275,55 @@ export interface Reservation {
   destino: string;
   origem_nome: string;
   destino_nome: string;
+}
+
+export interface VehiclePosition {
+  bus_id: string;
+  linha: string;
+  lat: number;
+  lon: number;
+  velocidade: number;
+  timestamp?: string;
+}
+
+export interface DensityCell {
+  lat: number;
+  lon: number;
+  count: number;
+}
+
+export interface GestoraEvent {
+  id: string;
+  nome: string;
+  lat: number;
+  lon: number;
+  audiencia_esperada: number;
+  raio_m: number;
+  created_at: string;
+}
+
+export interface EventIn {
+  nome: string;
+  lat: number;
+  lon: number;
+  audiencia_esperada?: number;
+  raio_m?: number;
+}
+
+export interface BusSuggestion {
+  bus_id: string;
+  linha: string;
+  lat: number;
+  lon: number;
+  dist_event_km: number;
+  tempo_chegada_min: number;
+  acao: string;
+}
+
+export interface SuggestResult {
+  event: GestoraEvent;
+  suggestions: BusSuggestion[];
+  total_nearby: number;
 }
 
 export interface DemoMaria {

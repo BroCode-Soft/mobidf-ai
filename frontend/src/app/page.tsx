@@ -1,6 +1,7 @@
 "use client";
 import Link from "next/link";
 import { motion } from "framer-motion";
+import Logo from "@/components/ui/Logo";
 
 const ease: [number,number,number,number] = [0.16, 1, 0.3, 1];
 
@@ -29,10 +30,7 @@ export default function Home() {
       {/* Nav */}
       <nav className="relative z-20 flex items-center justify-between px-8 py-5 max-w-7xl mx-auto">
         <motion.div initial={{ opacity:0, x:-20 }} animate={{ opacity:1, x:0 }} transition={{ duration:0.5, ease }}>
-          <div className="flex items-center gap-3">
-            <div style={{ width:36, height:36, borderRadius:10, background:"linear-gradient(135deg,#7c3aed,#6366f1)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:14, fontWeight:900, color:"#fff", boxShadow:"0 0 20px rgba(99,102,241,0.5)" }}>M</div>
-            <span style={{ fontWeight:800, fontSize:16, color:"var(--t1)", letterSpacing:"-0.02em" }}>MobiDF AI</span>
-          </div>
+          <Logo variant="full" height={34} />
         </motion.div>
         <motion.div initial={{ opacity:0, x:20 }} animate={{ opacity:1, x:0 }} transition={{ duration:0.5, ease }} className="flex items-center gap-2">
           <Link href="/cidadao" className="btn-ghost text-xs px-4 py-2">App Cidadão</Link>
