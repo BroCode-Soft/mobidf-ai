@@ -543,76 +543,86 @@ STOP_LINES_MAP: dict[str, list[str]] = {
     "SOL-NASC":  ["906","187"],
 }
 
-# ── Estações do Metrô-DF — rota oficial ───────────────────────
-# Linha Ceilândia (verde):  Terminal Asa Norte → Central → Asa Sul → Terminal Asa Sul
-#                           → Guará → Taguatinga → Centro Metropolitano → Ceilândia Norte
-# Linha Samambaia (laranja): bifurcação em Centro Metropolitano → Samambaia
+# ── Estações do Metrô-DF — coordenadas reais (OSM relation 420554/420556) ──
+# Tronco: Terminal Asa Norte → Central → Asa Sul → Shopping → Guará → Arniqueiras → Águas Claras
+# Bifurcação em Águas Claras:
+#   Verde (Ceilândia):  Conc. → Est.Parque → Praça do Relógio → Centro Met → Ceilândia Sul
+#                       → Guariroba → Ceilândia Centro → Ceilândia Norte → Ceilândia
+#   Laranja (Samambaia): Taguatinga Sul → Furnas → Samambaia Sul → Samambaia
 _MC = "#22c55e"   # verde — Linha Ceilândia
 _MS = "#f97316"   # laranja — Linha Samambaia
 
-def _s(sid, name, lat, lon, linha="ceilandia", ta="Ceilândia Norte", tb="Terminal Asa Norte",
+def _s(sid, name, lat, lon, linha="ceilandia", ta="Ceilândia", tb="Terminal Asa Norte",
         fp=6, fn=10):
-    cor = _MC if linha == "ceilandia" else _MS
-    if "ceilandia,samambaia" in linha:
-        cor = _MC
+    cor = _MC if "ceilandia" in linha else _MS
     return {"stop_id": sid, "stop_name": name, "stop_lat": lat, "stop_lon": lon,
             "type": "metro", "linha_metro": linha, "cor_metro": cor,
             "freq_pico": fp, "freq_normal": fn, "terminus_a": ta, "terminus_b": tb}
 
 METRO_STATIONS: list[dict] = [
-    # ── TRECHO ASA NORTE (Terminal Asa Norte → Central) ──────────
-    _s("MTR-T-NORTE",   "Terminal Asa Norte (Metrô)", -15.7476, -47.8800),
-    _s("MTR-115-N",     "Metrô 115 Norte",            -15.7553, -47.8852),
-    _s("MTR-113-N",     "Metrô 113 Norte",            -15.7620, -47.8873),
-    _s("MTR-111-N",     "Metrô 111 Norte",            -15.7688, -47.8889),
-    _s("MTR-109-N",     "Metrô 109 Norte",            -15.7756, -47.8900),
-    _s("MTR-107-N",     "Metrô 107 Norte",            -15.7824, -47.8908),
-    _s("MTR-105-N",     "Metrô 105 Norte",            -15.7862, -47.8918),
-    _s("MTR-103-N",     "Metrô 103 Norte",            -15.7880, -47.8928),
-    # ── ÁREA CENTRAL ─────────────────────────────────────────────
-    _s("MTR-C-NORTE",   "Metrô Cruzeiro Norte",       -15.7893, -47.8958),
-    _s("MTR-CENTRAL",   "Metrô Central",              -15.7944, -47.8923),
-    _s("MTR-GALERIA",   "Metrô Galeria",              -15.7988, -47.8924),
-    # ── TRECHO ASA SUL (Central → Terminal Asa Sul) ───────────────
-    _s("MTR-C-SUL",     "Metrô C. Sul / Sarah",       -15.8028, -47.8930),
-    _s("MTR-ASA-SUL",   "Metrô Asa Sul",              -15.8078, -47.8935),
-    _s("MTR-102-S",     "Metrô 102 Sul",              -15.8122, -47.8940),
-    _s("MTR-104-S",     "Metrô 104 Sul",              -15.8166, -47.8945),
-    _s("MTR-106-S",     "Metrô 106 Sul",              -15.8210, -47.8950),
-    _s("MTR-108-S",     "Metrô 108 Sul",              -15.8254, -47.8957),
-    _s("MTR-110-S",     "Metrô 110 Sul",              -15.8298, -47.8963),
-    _s("MTR-112-S",     "Metrô 112 Sul",              -15.8342, -47.8968),
-    _s("MTR-114-S",     "Metrô 114 Sul",              -15.8372, -47.9010),
-    _s("MTR-116-S",     "Metrô 116 Sul",              -15.8390, -47.9110),
-    _s("MTR-T-ASA-SUL", "Terminal Asa Sul (Metrô)",   -15.8400, -47.9220),
-    # ── TRECHO GUARÁ (Terminal Asa Sul → Guará) ───────────────────
-    _s("MTR-SHOPPING",  "Metrô Shopping",             -15.8313, -47.9315),
-    _s("MTR-GUARA",     "Metrô Guará",                -15.8290, -47.9484),
-    # ── TRECHO TAGUATINGA (Guará → Centro Metropolitano) ─────────
-    _s("MTR-ARNIQ",     "Metrô Arniqueiras",          -15.8258, -47.9728),
-    _s("MTR-CONCESS",   "Metrô Concessionárias",      -15.8218, -47.9886),
-    _s("MTR-EST-PARQ",  "Metrô Estrada Parque",       -15.8196, -48.0005),
-    _s("MTR-AG-CLARAS", "Metrô Águas Claras",         -15.8360, -48.0256),
-    # ── BIFURCAÇÃO ───────────────────────────────────────────────
-    _s("MTR-CENTRO-MET","Metrô Centro Metropolitano", -15.8140, -48.0438,
-       linha="ceilandia,samambaia", ta="Ceilândia Norte", tb="Samambaia", fp=6, fn=10),
-    # ── LINHA CEILÂNDIA — ramal noroeste ─────────────────────────
-    _s("MTR-GUARIROBA", "Metrô Guariroba",            -15.8256, -48.0718),
-    _s("MTR-CEI-SUL",   "Metrô Ceilândia Sul",        -15.8357, -48.1028),
-    _s("MTR-CEI-CENTRO","Metrô Ceilândia Centro",     -15.8265, -48.1118),
-    _s("MTR-CEI-NORTE", "Metrô Ceilândia Norte",      -15.8090, -48.1137),
-    # ── LINHA SAMAMBAIA — ramal sudoeste ─────────────────────────
-    _s("MTR-PRACA-REL", "Metrô Praça do Relógio",     -15.8192, -48.0583,
+    # ── TRECHO ASA NORTE (Terminal Asa Norte → Central) — coords aproximadas ──
+    _s("MTR-T-NORTE",   "Terminal Asa Norte (Metrô)", -15.7628, -47.8840,
+       linha="ceilandia,samambaia", ta="Ceilândia / Samambaia", tb="Terminal Asa Norte"),
+    _s("MTR-113-N",     "Metrô 113 Norte",            -15.7677, -47.8856,
+       linha="ceilandia,samambaia", ta="Ceilândia / Samambaia", tb="Terminal Asa Norte"),
+    _s("MTR-111-N",     "Metrô 111 Norte",            -15.7725, -47.8866,
+       linha="ceilandia,samambaia", ta="Ceilândia / Samambaia", tb="Terminal Asa Norte"),
+    _s("MTR-109-N",     "Metrô 109 Norte",            -15.7773, -47.8871,
+       linha="ceilandia,samambaia", ta="Ceilândia / Samambaia", tb="Terminal Asa Norte"),
+    _s("MTR-107-N",     "Metrô 107 Norte",            -15.7820, -47.8875,
+       linha="ceilandia,samambaia", ta="Ceilândia / Samambaia", tb="Terminal Asa Norte"),
+    _s("MTR-105-N",     "Metrô 105 Norte",            -15.7851, -47.8879,
+       linha="ceilandia,samambaia", ta="Ceilândia / Samambaia", tb="Terminal Asa Norte"),
+    # ── ÁREA CENTRAL — coordenadas reais OSM ─────────────────────
+    _s("MTR-CENTRAL",   "Metrô Central",              -15.79323, -47.88467,
+       linha="ceilandia,samambaia", ta="Ceilândia / Samambaia", tb="Terminal Asa Norte"),
+    _s("MTR-GALERIA",   "Metrô Galeria",              -15.79947, -47.88610,
+       linha="ceilandia,samambaia", ta="Ceilândia / Samambaia", tb="Terminal Asa Norte"),
+    # ── TRECHO ASA SUL — coordenadas reais OSM ───────────────────
+    _s("MTR-102-S",     "Metrô 102 Sul",              -15.80571, -47.88944,
+       linha="ceilandia,samambaia", ta="Ceilândia / Samambaia", tb="Terminal Asa Norte"),
+    _s("MTR-106-S",     "Metrô 106 Sul",              -15.81496, -47.89868,
+       linha="ceilandia,samambaia", ta="Ceilândia / Samambaia", tb="Terminal Asa Norte"),
+    _s("MTR-108-S",     "Metrô 108 Sul",              -15.81896, -47.90403,
+       linha="ceilandia,samambaia", ta="Ceilândia / Samambaia", tb="Terminal Asa Norte"),
+    _s("MTR-110-S",     "Metrô 110 Sul",              -15.82284, -47.90938,
+       linha="ceilandia,samambaia", ta="Ceilândia / Samambaia", tb="Terminal Asa Norte"),
+    _s("MTR-112-S",     "Metrô 112 Sul",              -15.82672, -47.91475,
+       linha="ceilandia,samambaia", ta="Ceilândia / Samambaia", tb="Terminal Asa Norte"),
+    _s("MTR-114-S",     "Metrô 114 Sul",              -15.83059, -47.92014,
+       linha="ceilandia,samambaia", ta="Ceilândia / Samambaia", tb="Terminal Asa Norte"),
+    _s("MTR-T-ASA-SUL", "Terminal Asa Sul (Metrô)",   -15.83705, -47.93263,
+       linha="ceilandia,samambaia", ta="Ceilândia / Samambaia", tb="Terminal Asa Norte"),
+    # ── TRECHO GUARÁ — coordenadas reais OSM ─────────────────────
+    _s("MTR-SHOPPING",  "Metrô Shopping",             -15.83240, -47.95067,
+       linha="ceilandia,samambaia", ta="Ceilândia / Samambaia", tb="Terminal Asa Norte"),
+    _s("MTR-FEIRA",     "Metrô Feira",                -15.82302, -47.97503,
+       linha="ceilandia,samambaia", ta="Ceilândia / Samambaia", tb="Terminal Asa Norte"),
+    _s("MTR-GUARA",     "Metrô Guará",                -15.82666, -47.98340,
+       linha="ceilandia,samambaia", ta="Ceilândia / Samambaia", tb="Terminal Asa Norte"),
+    _s("MTR-ARNIQ",     "Metrô Arniqueiras",          -15.83671, -48.01706,
+       linha="ceilandia,samambaia", ta="Ceilândia / Samambaia", tb="Terminal Asa Norte"),
+    # ── BIFURCAÇÃO: Águas Claras — coordenadas reais OSM ─────────
+    _s("MTR-AG-CLARAS", "Metrô Águas Claras",         -15.84000, -48.02826,
+       linha="ceilandia,samambaia", ta="Ceilândia / Samambaia", tb="Terminal Asa Norte", fp=6, fn=10),
+    # ── LINHA VERDE (Ceilândia) — coordenadas reais OSM ──────────
+    _s("MTR-CONCESS",   "Metrô Concessionárias",      -15.83514, -48.03862),
+    _s("MTR-EST-PARQ",  "Metrô Estrada Parque",       -15.83236, -48.04528),
+    _s("MTR-PRACA-REL", "Metrô Praça do Relógio",     -15.83326, -48.05634),
+    _s("MTR-CENTRO-MET","Metrô Centro Metropolitano", -15.83542, -48.08616),
+    _s("MTR-CEI-SUL",   "Metrô Ceilândia Sul",        -15.83774, -48.10325),
+    _s("MTR-GUARIROBA", "Metrô Guariroba",            -15.83059, -48.10725),
+    _s("MTR-CEI-CENTRO","Metrô Ceilândia Centro",     -15.82226, -48.11189),
+    _s("MTR-CEI-NORTE", "Metrô Ceilândia Norte",      -15.81485, -48.11609),
+    _s("MTR-CEILANDIA", "Metrô Ceilândia",            -15.80555, -48.12127),
+    # ── LINHA LARANJA (Samambaia) — coordenadas reais OSM ────────
+    _s("MTR-TAG-SUL",   "Metrô Taguatinga Sul",       -15.85179, -48.04191,
        linha="samambaia", ta="Samambaia", tb="Terminal Asa Norte", fp=8, fn=14),
-    _s("MTR-ONYAMA",    "Metrô Onyama",               -15.8278, -48.0393,
+    _s("MTR-FURNAS",    "Metrô Furnas",               -15.86490, -48.05983,
        linha="samambaia", ta="Samambaia", tb="Terminal Asa Norte", fp=8, fn=14),
-    _s("MTR-TAG-SUL",   "Metrô Taguatinga Sul",       -15.8248, -48.0495,
+    _s("MTR-SAMBA-SUL", "Metrô Samambaia Sul",        -15.86899, -48.07158,
        linha="samambaia", ta="Samambaia", tb="Terminal Asa Norte", fp=8, fn=14),
-    _s("MTR-FURNAS",    "Metrô Furnas",               -15.8430, -48.0594,
-       linha="samambaia", ta="Samambaia", tb="Terminal Asa Norte", fp=8, fn=14),
-    _s("MTR-SAMBA-SUL", "Metrô Samambaia Sul",        -15.8548, -48.0726,
-       linha="samambaia", ta="Samambaia", tb="Terminal Asa Norte", fp=8, fn=14),
-    _s("MTR-SAMAMBAIA", "Metrô Samambaia",            -15.8650, -48.0889,
+    _s("MTR-SAMAMBAIA", "Metrô Samambaia",            -15.87364, -48.08493,
        linha="samambaia", ta="Samambaia", tb="Terminal Asa Norte", fp=8, fn=14),
 ]
 
@@ -844,27 +854,24 @@ def all_stops_map():
 
 @app.get("/api/v1/cidadao/metro/lines")
 def metro_lines_endpoint():
-    """Gera as polylines de cada linha a partir das estações ordenadas."""
-    # Ordem real das estações no corredor principal (shared) + ramais
-    # Tronco compartilhado: Asa Norte → Asa Sul → Guará → Taguatinga → Centro Met
-    # Onyama e Praça do Relógio pertencem ao ramal Samambaia (pós-bifurcação)
+    """Gera as polylines a partir das coordenadas reais OSM do Metrô-DF."""
+    # Tronco: Terminal Asa Norte → ... → Arniqueiras → Águas Claras (bifurcação)
+    # Verde: Águas Claras → Conc. → Est.Parque → Praça do Relógio → Centro Met → Ceilândia
+    # Laranja: Águas Claras → Taguatinga Sul → Furnas → Samambaia Sul → Samambaia
     ORDER_SHARED = [
-        "MTR-T-NORTE","MTR-115-N","MTR-113-N","MTR-111-N","MTR-109-N",
-        "MTR-107-N","MTR-105-N","MTR-103-N","MTR-C-NORTE","MTR-CENTRAL",
-        "MTR-GALERIA","MTR-C-SUL","MTR-ASA-SUL","MTR-102-S","MTR-104-S",
-        "MTR-106-S","MTR-108-S","MTR-110-S","MTR-112-S","MTR-114-S",
-        "MTR-116-S","MTR-T-ASA-SUL","MTR-SHOPPING","MTR-GUARA",
-        "MTR-ARNIQ","MTR-CONCESS","MTR-EST-PARQ","MTR-AG-CLARAS",
-        "MTR-CENTRO-MET",
+        "MTR-T-NORTE","MTR-113-N","MTR-111-N","MTR-109-N","MTR-107-N","MTR-105-N",
+        "MTR-CENTRAL","MTR-GALERIA",
+        "MTR-102-S","MTR-106-S","MTR-108-S","MTR-110-S","MTR-112-S","MTR-114-S",
+        "MTR-T-ASA-SUL","MTR-SHOPPING","MTR-FEIRA","MTR-GUARA",
+        "MTR-ARNIQ","MTR-AG-CLARAS",
     ]
     ORDER_CEI = [
-        "MTR-CENTRO-MET","MTR-GUARIROBA","MTR-CEI-SUL",
-        "MTR-CEI-CENTRO","MTR-CEI-NORTE",
+        "MTR-AG-CLARAS","MTR-CONCESS","MTR-EST-PARQ","MTR-PRACA-REL",
+        "MTR-CENTRO-MET","MTR-CEI-SUL","MTR-GUARIROBA",
+        "MTR-CEI-CENTRO","MTR-CEI-NORTE","MTR-CEILANDIA",
     ]
-    # Ramal Samambaia: bifurca no Centro Met e vai para sudoeste
     ORDER_SAM = [
-        "MTR-CENTRO-MET","MTR-PRACA-REL","MTR-TAG-SUL","MTR-FURNAS",
-        "MTR-SAMBA-SUL","MTR-SAMAMBAIA",
+        "MTR-AG-CLARAS","MTR-TAG-SUL","MTR-FURNAS","MTR-SAMBA-SUL","MTR-SAMAMBAIA",
     ]
 
     station_map = {s["stop_id"]: s for s in METRO_STATIONS}

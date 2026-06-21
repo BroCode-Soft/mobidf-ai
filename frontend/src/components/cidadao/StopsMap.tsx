@@ -20,53 +20,50 @@ import type { Stop, MetroLineSegment } from "@/lib/api";
    Ramal Samambaia (laranja, M2): Centro Met. → Taguatinga Sul → Furnas → Samambaia
 ── */
 // Tronco compartilhado: Asa Norte → Asa Sul → Guará → Taguatinga → Centro Met
+// Coordenadas reais do Metrô-DF (OSM relation 420554/420556)
+// Tronco: Terminal Asa Norte → Central → Asa Sul → Shopping → Guará → Arniqueiras → Águas Claras
 const METRO_SPINE: [number, number][] = [
-  [-15.7476, -47.8800], // Terminal Asa Norte
-  [-15.7553, -47.8852], // 115 Norte
-  [-15.7620, -47.8873], // 113 Norte
-  [-15.7688, -47.8889], // 111 Norte
-  [-15.7756, -47.8900], // 109 Norte
-  [-15.7824, -47.8908], // 107 Norte
-  [-15.7862, -47.8918], // 105 Norte
-  [-15.7880, -47.8928], // 103 Norte
-  [-15.7893, -47.8958], // Cruzeiro Norte
-  [-15.7944, -47.8923], // Central
-  [-15.7988, -47.8924], // Galeria
-  [-15.8028, -47.8930], // Cruzeiro Sul / Sarah
-  [-15.8078, -47.8935], // Asa Sul
-  [-15.8122, -47.8940], // 102 Sul
-  [-15.8166, -47.8945], // 104 Sul
-  [-15.8210, -47.8950], // 106 Sul
-  [-15.8254, -47.8957], // 108 Sul
-  [-15.8298, -47.8963], // 110 Sul
-  [-15.8342, -47.8968], // 112 Sul
-  [-15.8372, -47.9010], // 114 Sul
-  [-15.8390, -47.9110], // 116 Sul
-  [-15.8400, -47.9220], // Terminal Asa Sul
-  [-15.8313, -47.9315], // Shopping
-  [-15.8290, -47.9484], // Guará
-  [-15.8258, -47.9728], // Arniqueiras
-  [-15.8218, -47.9886], // Concessionárias
-  [-15.8196, -48.0005], // Estrada Parque
-  [-15.8360, -48.0256], // Águas Claras
-  [-15.8140, -48.0438], // Centro Metropolitano (bifurcação)
+  [-15.7628, -47.8840], // Terminal Asa Norte (aprox.)
+  [-15.7677, -47.8856], // 113 Norte
+  [-15.7725, -47.8866], // 111 Norte
+  [-15.7773, -47.8871], // 109 Norte
+  [-15.7820, -47.8875], // 107 Norte
+  [-15.7851, -47.8879], // 105 Norte
+  [-15.7932, -47.8847], // Central
+  [-15.7995, -47.8861], // Galeria
+  [-15.8057, -47.8894], // 102 Sul
+  [-15.8150, -47.8987], // 106 Sul
+  [-15.8189, -47.9040], // 108 Sul
+  [-15.8228, -47.9094], // 110 Sul
+  [-15.8267, -47.9148], // 112 Sul
+  [-15.8306, -47.9201], // 114 Sul
+  [-15.8371, -47.9326], // Terminal Asa Sul
+  [-15.8324, -47.9507], // Shopping
+  [-15.8230, -47.9750], // Feira
+  [-15.8267, -47.9834], // Guará
+  [-15.8367, -48.0171], // Arniqueiras
+  [-15.8400, -48.0283], // Águas Claras (bifurcação)
 ];
-// Ramal Ceilândia (verde M1): bifurca no Centro Met e vai para noroeste
+// Ramal Verde (Ceilândia): Águas Claras → Concessionárias → ... → Ceilândia
 const METRO_CEILANDIA: [number, number][] = [
-  [-15.8140, -48.0438], // Centro Metropolitano
-  [-15.8256, -48.0718], // Guariroba
-  [-15.8357, -48.1028], // Ceilândia Sul
-  [-15.8265, -48.1118], // Ceilândia Centro
-  [-15.8090, -48.1137], // Ceilândia Norte
+  [-15.8400, -48.0283], // Águas Claras
+  [-15.8351, -48.0386], // Concessionárias
+  [-15.8324, -48.0453], // Estrada Parque
+  [-15.8333, -48.0563], // Praça do Relógio
+  [-15.8354, -48.0862], // Centro Metropolitano
+  [-15.8377, -48.1033], // Ceilândia Sul
+  [-15.8306, -48.1073], // Guariroba
+  [-15.8223, -48.1119], // Ceilândia Centro
+  [-15.8149, -48.1161], // Ceilândia Norte
+  [-15.8056, -48.1213], // Ceilândia (terminal)
 ];
-// Ramal Samambaia (laranja M2): bifurca no Centro Met e vai para sudoeste
+// Ramal Laranja (Samambaia): Águas Claras → Taguatinga Sul → ... → Samambaia
 const METRO_SAMAMBAIA: [number, number][] = [
-  [-15.8140, -48.0438], // Centro Metropolitano
-  [-15.8192, -48.0583], // Praça do Relógio
-  [-15.8248, -48.0495], // Taguatinga Sul
-  [-15.8430, -48.0594], // Furnas
-  [-15.8548, -48.0726], // Samambaia Sul
-  [-15.8650, -48.0889], // Samambaia
+  [-15.8400, -48.0283], // Águas Claras
+  [-15.8518, -48.0419], // Taguatinga Sul
+  [-15.8649, -48.0598], // Furnas
+  [-15.8690, -48.0716], // Samambaia Sul
+  [-15.8736, -48.0849], // Samambaia (terminal)
 ];
 
 /* ── Ícone de estação de metrô (diamante colorido) ── */
