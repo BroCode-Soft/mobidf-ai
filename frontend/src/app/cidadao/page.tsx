@@ -1077,6 +1077,24 @@ export default function CidadaoPage() {
                       const isSelected = selectedRoute === route;
                       const pct = route.comfort_pct;
                       const comfortColor = pct<40 ? "#10b981" : pct<65 ? "#f59e0b" : pct<80 ? "#f97316" : "#f43f5e";
+                      const hasMetro = route.has_metro;
+                      const isDirect = route.type === "direct";
+                      const accentColor = isDirect ? "#6366f1" : hasMetro ? "#22c55e" : "#f59e0b";
+                      const headerGrad = isDirect
+                        ? "linear-gradient(135deg,#6366f1,#818cf8)"
+                        : hasMetro
+                          ? "linear-gradient(135deg,#16a34a,#22c55e)"
+                          : "linear-gradient(135deg,#d97706,#f59e0b)";
+                      const headerIcon = isDirect ? "⚡" : hasMetro ? "🚇" : "🔀";
+
+                      const nBus  = route.legs.filter((l: {leg_type:string}) => l.leg_type === "bus").length;
+                      const nMtr  = route.legs.filter((l: {leg_type:string}) => l.leg_type === "metro").length;
+                      const subtitle = isDirect
+                        ? "Rota direta · 1 ônibus"
+                        : [nBus > 0 && `${nBus} ônibus`, nMtr > 0 && `${nMtr} metrô`]
+                            .filter(Boolean).join(" + ")
+                            + ` · ${route.transfers} baldeação${route.transfers > 1 ? "ões" : ""}`;
+
                       return (
                         <motion.div key={ri}
                           initial={{ opacity:0, y:12 }} animate={{ opacity:1, y:0 }}
@@ -1085,25 +1103,35 @@ export default function CidadaoPage() {
                           style={{ background:"#fff", borderRadius:20, padding:"16px 18px",
                             cursor:"pointer", position:"relative", overflow:"hidden",
                             boxShadow: isSelected
-                              ? "0 0 0 2px #7c3aed, 0 4px 20px rgba(99,102,241,0.2)"
+                              ? `0 0 0 2px ${accentColor}, 0 4px 20px ${accentColor}33`
                               : "0 2px 12px rgba(0,0,0,0.08)" }}>
 
                           {/* Header */}
                           <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12 }}>
                             <div style={{ width:40, height:40, borderRadius:13, flexShrink:0,
-                              background: route.type==="direct"
-                                ? "linear-gradient(135deg,#6366f1,#818cf8)"
-                                : "linear-gradient(135deg,#f59e0b,#fbbf24)",
+                              background: headerGrad,
                               display:"flex", alignItems:"center", justifyContent:"center", fontSize:20 }}>
-                              {route.type==="direct" ? "⚡" : "🔀"}
+                              {headerIcon}
                             </div>
                             <div style={{ flex:1, minWidth:0 }}>
-                              <div style={{ fontSize:13, fontWeight:800, color:"#0f172a",
+                              <div style={{ fontSize:12, fontWeight:800, color:"#0f172a",
                                 overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-                                {route.label}
+                                {/* Linha pills */}
+                                <span style={{ display:"flex", gap:4, flexWrap:"wrap" }}>
+                                  {route.legs.map((leg: {leg_type:string,line_name:string}, li: number) => (
+                                    <span key={li} style={{
+                                      padding:"1px 6px", borderRadius:6, fontSize:10, fontWeight:800,
+                                      background: leg.leg_type==="metro" ? "#16a34a22" : "#6366f122",
+                                      color: leg.leg_type==="metro" ? "#16a34a" : "#4338ca",
+                                      border: `1px solid ${leg.leg_type==="metro" ? "#16a34a44" : "#6366f144"}`,
+                                    }}>
+                                      {leg.leg_type==="metro" ? "🚇" : "🚌"} {leg.line_name.replace("Metrô ","M.")}
+                                    </span>
+                                  ))}
+                                </span>
                               </div>
-                              <div style={{ fontSize:10, color:"#64748b", marginTop:1 }}>
-                                {route.type==="direct" ? "Rota direta" : `1 baldeação · ${route.transfer_stop?.split("-")[0].trim()}`}
+                              <div style={{ fontSize:10, color:"#64748b", marginTop:3 }}>
+                                {subtitle}
                               </div>
                             </div>
                             <div style={{ textAlign:"right", flexShrink:0 }}>
@@ -1115,45 +1143,71 @@ export default function CidadaoPage() {
                           </div>
 
                           {/* Timeline das pernas */}
-                          <div style={{ display:"flex", flexDirection:"column", gap:6, marginBottom:12 }}>
-                            {route.legs.map((leg, li) => (
-                              <div key={li} style={{ display:"flex", alignItems:"center", gap:8 }}>
-                                <div style={{ width:6, height:6, borderRadius:"50%", flexShrink:0,
-                                  background: li===0 ? "#10b981" : "#7c3aed" }} />
-                                <div style={{ flex:1, minWidth:0 }}>
-                                  <div style={{ fontSize:10, color:"#475569", fontWeight:600,
-                                    overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-                                    {leg.from_stop_name}
+                          <div style={{ display:"flex", flexDirection:"column", gap:0, marginBottom:12 }}>
+                            {route.legs.map((leg: {leg_type:string,from_stop_name:string,line_name:string,duration_min:number,to_stop_name:string}, li: number) => {
+                              const isMetro = leg.leg_type === "metro";
+                              const dotColor = li===0 ? "#10b981" : isMetro ? "#22c55e" : "#7c3aed";
+                              const tagBg    = isMetro ? "#16a34a18" : "#6366f118";
+                              const tagColor = isMetro ? "#16a34a" : "#6366f1";
+                              return (
+                                <div key={li}>
+                                  {/* Parada de embarque */}
+                                  <div style={{ display:"flex", alignItems:"center", gap:8, paddingBottom:4 }}>
+                                    <div style={{ display:"flex", flexDirection:"column", alignItems:"center", width:16, flexShrink:0 }}>
+                                      <div style={{ width:10, height:10, borderRadius:"50%", background:dotColor,
+                                        border:"2px solid #fff", boxShadow:`0 0 0 1px ${dotColor}` }} />
+                                      <div style={{ width:2, height:20, background:"#e2e8f0", marginTop:2 }} />
+                                    </div>
+                                    <div style={{ flex:1, minWidth:0 }}>
+                                      <div style={{ fontSize:10, color:"#334155", fontWeight:600,
+                                        overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                                        {leg.from_stop_name.replace("Metrô ","").replace("Terminal ","T. ").replace("Rodoviária do Plano Piloto","Rodoviária PP")}
+                                      </div>
+                                    </div>
+                                    <div style={{ padding:"2px 7px", borderRadius:99, fontSize:9,
+                                      fontWeight:800, background:tagBg, color:tagColor, flexShrink:0,
+                                      display:"flex", alignItems:"center", gap:3 }}>
+                                      {isMetro ? "🚇" : "🚌"} {leg.line_name.replace("Metrô ","M.")} · {leg.duration_min}min
+                                    </div>
                                   </div>
+                                  {/* Se última perna, mostra parada de desembarque */}
+                                  {li === route.legs.length - 1 && (
+                                    <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                                      <div style={{ width:16, flexShrink:0, display:"flex", justifyContent:"center" }}>
+                                        <div style={{ width:10, height:10, borderRadius:"50%", background:"#f43f5e",
+                                          border:"2px solid #fff", boxShadow:"0 0 0 1px #f43f5e" }} />
+                                      </div>
+                                      <div style={{ flex:1, minWidth:0 }}>
+                                        <div style={{ fontSize:10, color:"#334155", fontWeight:600,
+                                          overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                                          {leg.to_stop_name.replace("Metrô ","").replace("Terminal ","T. ").replace("Rodoviária do Plano Piloto","Rodoviária PP")}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  )}
                                 </div>
-                                <div style={{ padding:"2px 8px", borderRadius:99, fontSize:9,
-                                  fontWeight:800, background:"rgba(99,102,241,0.1)",
-                                  color:"#6366f1", flexShrink:0 }}>
-                                  {leg.line_name} · {leg.duration_min}min
-                                </div>
-                              </div>
-                            ))}
-                            <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                              <div style={{ width:6, height:6, borderRadius:"50%", flexShrink:0, background:"#f43f5e" }} />
-                              <div style={{ flex:1, minWidth:0 }}>
-                                <div style={{ fontSize:10, color:"#475569", fontWeight:600,
-                                  overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-                                  {route.legs[route.legs.length-1].to_stop_name}
-                                </div>
-                              </div>
-                            </div>
+                              );
+                            })}
                           </div>
 
                           {/* Footer: caminhada + conforto */}
                           <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-                            <span style={{ padding:"3px 9px", borderRadius:99, fontSize:9, fontWeight:700,
-                              background:"rgba(100,116,139,0.1)", color:"#64748b" }}>
-                              🚶 {route.walk_min}min a pé
-                            </span>
+                            {route.walk_min > 0 && (
+                              <span style={{ padding:"3px 9px", borderRadius:99, fontSize:9, fontWeight:700,
+                                background:"rgba(100,116,139,0.1)", color:"#64748b" }}>
+                                🚶 {route.walk_min}min a pé
+                              </span>
+                            )}
                             <span style={{ padding:"3px 9px", borderRadius:99, fontSize:9, fontWeight:700,
                               background:`${comfortColor}18`, color:comfortColor }}>
                               {pct<40?"🪑 Vai sentado":pct<65?"🪑 Provavelmente sentado":pct<80?"🧍 Em pé":"😰 Muito cheio"}
                             </span>
+                            {hasMetro && (
+                              <span style={{ padding:"3px 9px", borderRadius:99, fontSize:9, fontWeight:700,
+                                background:"#16a34a18", color:"#16a34a" }}>
+                                🚇 Inclui Metrô DF
+                              </span>
+                            )}
                           </div>
                         </motion.div>
                       );

@@ -1109,15 +1109,53 @@ def suggest_reallocation(event_id: str):
     ]
     return {"event": event, "suggestions": suggestions, "total_nearby": len(already_close)}
 
+# ── Dados para roteamento multi-modal com metrô ───────────────────────────────
+# Hub de ônibus → estação de metrô mais próxima
+_HUB_METRO: dict[str, str] = {
+    "CEI-N":    "MTR-CEI-NORTE",
+    "CEI-S":    "MTR-CEI-CENTRO",
+    "RODO":     "MTR-CENTRAL",
+    "ASA-S-W3": "MTR-T-ASA-SUL",
+    "ASA-N-W3": "MTR-T-NORTE",
+    "UNB":      "MTR-T-NORTE",
+    "AG-CL":    "MTR-AG-CLARAS",
+    "TAG-N":    "MTR-CONCESS",
+    "TAG-S":    "MTR-TAG-SUL",
+    "SAM-N":    "MTR-SAMAMBAIA",
+    "GUA":      "MTR-GUARA",
+}
+
+# Ordem das estações por linha (para calcular tempo de viagem)
+_MTR_VERDE = [
+    "MTR-T-NORTE","MTR-113-N","MTR-111-N","MTR-109-N","MTR-107-N","MTR-105-N",
+    "MTR-CENTRAL","MTR-GALERIA","MTR-102-S","MTR-106-S","MTR-108-S","MTR-110-S",
+    "MTR-112-S","MTR-114-S","MTR-T-ASA-SUL","MTR-SHOPPING","MTR-FEIRA","MTR-GUARA",
+    "MTR-ARNIQ","MTR-AG-CLARAS","MTR-CONCESS","MTR-EST-PARQ","MTR-PRACA-REL",
+    "MTR-CENTRO-MET","MTR-CEI-SUL","MTR-GUARIROBA","MTR-CEI-CENTRO",
+    "MTR-CEI-NORTE","MTR-CEILANDIA",
+]
+_MTR_LARANJA = [
+    "MTR-T-NORTE","MTR-113-N","MTR-111-N","MTR-109-N","MTR-107-N","MTR-105-N",
+    "MTR-CENTRAL","MTR-GALERIA","MTR-102-S","MTR-106-S","MTR-108-S","MTR-110-S",
+    "MTR-112-S","MTR-114-S","MTR-T-ASA-SUL","MTR-SHOPPING","MTR-FEIRA","MTR-GUARA",
+    "MTR-ARNIQ","MTR-AG-CLARAS","MTR-TAG-SUL","MTR-FURNAS","MTR-SAMBA-SUL","MTR-SAMAMBAIA",
+]
+
+def _mtr_time(a: str, b: str) -> int:
+    """Estima tempo (minutos) de viagem entre duas estações do metrô."""
+    for line in [_MTR_VERDE, _MTR_LARANJA]:
+        if a in line and b in line:
+            return abs(line.index(b) - line.index(a)) * 2 + 3
+    return 999  # estações incompatíveis
+
+
 @app.get("/api/v1/cidadao/routes/plan")
 def plan_route(from_lat: float, from_lon: float, to_lat: float, to_lon: float):
     import math as _m
 
-    all_stops_data = list(STOPS) + [
-        {"stop_id": s["stop_id"], "stop_name": s["stop_name"],
-         "stop_lat": s["stop_lat"], "stop_lon": s["stop_lon"]}
-        for s in METRO_STATIONS
-    ]
+    hub_stops = list(STOPS)  # hubs com dados de linha (STOP_LINES_MAP)
+    metro_stops_list = list(METRO_STATIONS)
+    all_stops_data = hub_stops + metro_stops_list
 
     def hav(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
         R = 6371000.0
@@ -1127,113 +1165,239 @@ def plan_route(from_lat: float, from_lon: float, to_lat: float, to_lon: float):
         a = _m.sin(dp/2)**2 + _m.cos(p1)*_m.cos(p2)*_m.sin(dl/2)**2
         return R * 2 * _m.asin(_m.sqrt(a))
 
-    WALK  = 83.3   # m/min  (~5 km/h)
-    BUS   = 400.0  # m/min  (~24 km/h)
-    WAIT  = 10.0   # min transfer wait
+    WALK  = 83.3   # m/min (~5 km/h)
+    BUS   = 380.0  # m/min (~23 km/h médio em trânsito urbano)
+    METRO = 550.0  # m/min (~33 km/h — metrô)
+    WAIT  = 8.0    # min de espera por baldeação
 
-    o_stops = sorted(all_stops_data, key=lambda s: hav(from_lat, from_lon, s["stop_lat"], s["stop_lon"]))[:5]
-    d_stops = sorted(all_stops_data, key=lambda s: hav(to_lat, to_lon, s["stop_lat"], s["stop_lon"]))[:5]
+    # Hubs mais próximos à origem/destino
+    o_hubs = sorted(hub_stops, key=lambda s: hav(from_lat, from_lon, s["stop_lat"], s["stop_lon"]))[:4]
+    d_hubs = sorted(hub_stops, key=lambda s: hav(to_lat,   to_lon,   s["stop_lat"], s["stop_lon"]))[:4]
 
-    routes = []
+    # Estações de metrô mais próximas à origem/destino
+    o_metro = sorted(metro_stops_list, key=lambda s: hav(from_lat, from_lon, s["stop_lat"], s["stop_lon"]))[:3]
+    d_metro = sorted(metro_stops_list, key=lambda s: hav(to_lat,   to_lon,   s["stop_lat"], s["stop_lon"]))[:3]
+
+    # Parada mais próxima para exibição (bus ou metrô)
+    nearest_any = sorted(all_stops_data, key=lambda s: hav(from_lat, from_lon, s["stop_lat"], s["stop_lon"]))
+    nearest_any_d = sorted(all_stops_data, key=lambda s: hav(to_lat, to_lon,   s["stop_lat"], s["stop_lon"]))
+
+    mtr_map = {s["stop_id"]: s for s in metro_stops_list}
+
+    routes: list[dict] = []
     seen: set = set()
 
-    # ── Rotas diretas ───────────────────────────────────────────────────────────
-    for os_ in o_stops[:3]:
+    def _bus_leg(os_: dict, ds_: dict, lid: str) -> dict:
+        ln = ALL_LINES.get(lid, {})
+        bt = hav(os_["stop_lat"], os_["stop_lon"], ds_["stop_lat"], ds_["stop_lon"]) / BUS
+        return {
+            "leg_type":     "bus",
+            "from_stop_id": os_["stop_id"], "from_stop_name": os_["stop_name"],
+            "from_lat": os_["stop_lat"],    "from_lon": os_["stop_lon"],
+            "to_stop_id":   ds_["stop_id"], "to_stop_name": ds_["stop_name"],
+            "to_lat": ds_["stop_lat"],      "to_lon": ds_["stop_lon"],
+            "line_id": lid, "line_name": ln.get("nome", lid),
+            "line_desc": ln.get("desc", ""), "line_tipo": ln.get("tipo", "local"),
+            "duration_min": round(bt),
+        }
+
+    def _metro_leg(from_s: dict, to_s: dict) -> dict:
+        t = _mtr_time(from_s["stop_id"], to_s["stop_id"])
+        verde = from_s["stop_id"] in _MTR_VERDE and to_s["stop_id"] in _MTR_VERDE
+        cor_nome = "Verde" if verde else "Laranja"
+        return {
+            "leg_type":     "metro",
+            "from_stop_id": from_s["stop_id"], "from_stop_name": from_s["stop_name"],
+            "from_lat": from_s["stop_lat"],    "from_lon": from_s["stop_lon"],
+            "to_stop_id":   to_s["stop_id"],   "to_stop_name": to_s["stop_name"],
+            "to_lat": to_s["stop_lat"],        "to_lon": to_s["stop_lon"],
+            "line_id": f"metro-{cor_nome.lower()}", "line_name": f"Metrô {cor_nome}",
+            "line_desc": f"Metrô DF — Linha {cor_nome}", "line_tipo": "metro",
+            "duration_min": t,
+        }
+
+    def _comfort() -> tuple:
+        pct = random.randint(15, 80)
+        label = "sentado" if pct < 40 else "provavelmente sentado" if pct < 65 else "em pé" if pct < 80 else "muito cheio"
+        return pct, label
+
+    def _make_route(rtype: str, legs: list, wf: float, wt: float) -> dict:
+        pct, comfort = _comfort()
+        transfers = len(legs) - 1
+        bus_legs = [l for l in legs if l["leg_type"] == "bus"]
+        mtr_legs = [l for l in legs if l["leg_type"] == "metro"]
+
+        if mtr_legs:
+            icon_parts = []
+            for l in legs:
+                icon_parts.append("🚇 " + l["line_name"] if l["leg_type"] == "metro" else l["line_name"])
+            label = " → ".join(icon_parts)
+        elif len(bus_legs) == 1:
+            label = bus_legs[0]["line_name"]
+        else:
+            label = " → ".join(l["line_name"] for l in bus_legs)
+
+        total = round(wf + sum(l["duration_min"] for l in legs) + WAIT * (len(legs) - 1) + wt)
+        return {
+            "type": rtype,
+            "label": label,
+            "legs": legs,
+            "total_duration_min": total,
+            "walk_min": round(wf + wt),
+            "transfers": transfers,
+            "num_vehicles": len(bus_legs) + len(mtr_legs),
+            "has_metro": bool(mtr_legs),
+            "comfort_pct": pct,
+            "comfort": comfort,
+        }
+
+    wf0 = hav(from_lat, from_lon, o_hubs[0]["stop_lat"], o_hubs[0]["stop_lon"]) / WALK if o_hubs else 0
+    wt0 = hav(to_lat,   to_lon,   d_hubs[0]["stop_lat"], d_hubs[0]["stop_lon"]) / WALK if d_hubs else 0
+
+    # ── 1. Rotas diretas (1 ônibus) ────────────────────────────────────────────
+    for os_ in o_hubs[:3]:
         ol = set(STOP_LINES_MAP.get(os_["stop_id"], []))
-        for ds_ in d_stops[:3]:
+        wf = hav(from_lat, from_lon, os_["stop_lat"], os_["stop_lon"]) / WALK
+        for ds_ in d_hubs[:3]:
             dl = set(STOP_LINES_MAP.get(ds_["stop_id"], []))
+            wt = hav(to_lat, to_lon, ds_["stop_lat"], ds_["stop_lon"]) / WALK
             for lid in ol & dl:
                 key = f"d-{lid}-{os_['stop_id']}-{ds_['stop_id']}"
                 if key in seen: continue
                 seen.add(key)
-                line = ALL_LINES.get(lid, {})
-                wf   = hav(from_lat, from_lon, os_["stop_lat"], os_["stop_lon"]) / WALK
-                wt   = hav(to_lat,   to_lon,   ds_["stop_lat"], ds_["stop_lon"]) / WALK
-                bt   = hav(os_["stop_lat"], os_["stop_lon"], ds_["stop_lat"], ds_["stop_lon"]) / BUS
-                pct  = random.randint(15, 85)
-                routes.append({
-                    "type": "direct",
-                    "label": line.get("nome", lid),
-                    "legs": [{
-                        "from_stop_id":   os_["stop_id"],  "from_stop_name": os_["stop_name"],
-                        "from_lat":       os_["stop_lat"], "from_lon":       os_["stop_lon"],
-                        "to_stop_id":     ds_["stop_id"],  "to_stop_name":   ds_["stop_name"],
-                        "to_lat":         ds_["stop_lat"], "to_lon":         ds_["stop_lon"],
-                        "line_id":        lid,             "line_name":      line.get("nome", lid),
-                        "line_desc":      line.get("desc", ""),
-                        "line_tipo":      line.get("tipo", "local"),
-                        "duration_min":   round(bt),
-                    }],
-                    "total_duration_min": round(wf + bt + wt),
-                    "walk_min":  round(wf + wt),
-                    "transfers": 0,
-                    "comfort_pct": pct,
-                    "comfort": "sentado" if pct<40 else "provavelmente sentado" if pct<65 else "em pé" if pct<80 else "muito cheio",
-                })
+                routes.append(_make_route("direct", [_bus_leg(os_, ds_, lid)], wf, wt))
 
-    # ── Rotas com 1 baldeação via hubs ─────────────────────────────────────────
-    HUB_IDS = ["RODO","CEI-N","TAG-N","SAM-N","GUA","SOB","PLAN","GAMA","SANTA-M","AG-CL"]
-    for os_ in o_stops[:2]:
+    # ── 2. Rotas com 1 baldeação ônibus→ônibus via hub ─────────────────────────
+    HUB_IDS = ["RODO","CEI-N","TAG-N","SAM-N","GUA","SOB","PLAN","GAMA","SANTA-M","AG-CL",
+               "ASA-N-W3","ASA-S-W3","CRUZEIRO","SUDOESTE"]
+    for os_ in o_hubs[:3]:
         ol = set(STOP_LINES_MAP.get(os_["stop_id"], []))
+        wf = hav(from_lat, from_lon, os_["stop_lat"], os_["stop_lon"]) / WALK
         for hub_id in HUB_IDS:
-            hub = next((s for s in all_stops_data if s["stop_id"] == hub_id), None)
+            hub = next((s for s in hub_stops if s["stop_id"] == hub_id), None)
             if not hub: continue
             hl = set(STOP_LINES_MAP.get(hub_id, []))
-            leg1_lines = ol & hl
-            if not leg1_lines: continue
-            for ds_ in d_stops[:2]:
-                dl = set(STOP_LINES_MAP.get(ds_["stop_id"], []))
-                leg2_lines = hl & dl
-                if not leg2_lines: continue
-                for l1 in list(leg1_lines)[:2]:
-                    for l2 in list(leg2_lines)[:2]:
+            for l1 in list(ol & hl)[:2]:
+                for ds_ in d_hubs[:3]:
+                    dl = set(STOP_LINES_MAP.get(ds_["stop_id"], []))
+                    wt = hav(to_lat, to_lon, ds_["stop_lat"], ds_["stop_lon"]) / WALK
+                    for l2 in list(hl & dl)[:2]:
                         if l1 == l2: continue
                         key = f"t-{l1}-{hub_id}-{l2}"
                         if key in seen: continue
                         seen.add(key)
-                        ln1 = ALL_LINES.get(l1, {}); ln2 = ALL_LINES.get(l2, {})
-                        wf  = hav(from_lat, from_lon, os_["stop_lat"], os_["stop_lon"]) / WALK
-                        wt  = hav(to_lat,   to_lon,   ds_["stop_lat"], ds_["stop_lon"]) / WALK
-                        b1  = hav(os_["stop_lat"], os_["stop_lon"], hub["stop_lat"], hub["stop_lon"]) / BUS
-                        b2  = hav(hub["stop_lat"], hub["stop_lon"], ds_["stop_lat"], ds_["stop_lon"]) / BUS
-                        pct = random.randint(15, 85)
-                        routes.append({
-                            "type": "transfer",
-                            "label": f"{ln1.get('nome',l1)} → {ln2.get('nome',l2)}",
-                            "legs": [
-                                {
-                                    "from_stop_id": os_["stop_id"], "from_stop_name": os_["stop_name"],
-                                    "from_lat": os_["stop_lat"],    "from_lon": os_["stop_lon"],
-                                    "to_stop_id": hub_id,           "to_stop_name": hub["stop_name"],
-                                    "to_lat": hub["stop_lat"],      "to_lon": hub["stop_lon"],
-                                    "line_id": l1, "line_name": ln1.get("nome",l1),
-                                    "line_desc": ln1.get("desc",""), "line_tipo": ln1.get("tipo","local"),
-                                    "duration_min": round(b1),
-                                },
-                                {
-                                    "from_stop_id": hub_id,         "from_stop_name": hub["stop_name"],
-                                    "from_lat": hub["stop_lat"],    "from_lon": hub["stop_lon"],
-                                    "to_stop_id": ds_["stop_id"],   "to_stop_name": ds_["stop_name"],
-                                    "to_lat": ds_["stop_lat"],      "to_lon": ds_["stop_lon"],
-                                    "line_id": l2, "line_name": ln2.get("nome",l2),
-                                    "line_desc": ln2.get("desc",""), "line_tipo": ln2.get("tipo","local"),
-                                    "duration_min": round(b2),
-                                },
-                            ],
-                            "total_duration_min": round(wf + b1 + WAIT + b2 + wt),
-                            "walk_min": round(wf + wt),
-                            "transfers": 1,
-                            "transfer_stop": hub["stop_name"],
-                            "comfort_pct": pct,
-                            "comfort": "sentado" if pct<40 else "provavelmente sentado" if pct<65 else "em pé" if pct<80 else "muito cheio",
-                        })
+                        routes.append(_make_route("transfer",
+                            [_bus_leg(os_, hub, l1), _bus_leg(hub, ds_, l2)], wf, wt))
 
+    # ── 3. Metrô direto (se origem e destino perto de estações) ────────────────
+    MTR_MAX_WALK = 1200  # m
+    for om in o_metro[:2]:
+        dist_o = hav(from_lat, from_lon, om["stop_lat"], om["stop_lon"])
+        if dist_o > MTR_MAX_WALK: continue
+        wf = dist_o / WALK
+        for dm in d_metro[:2]:
+            if om["stop_id"] == dm["stop_id"]: continue
+            t = _mtr_time(om["stop_id"], dm["stop_id"])
+            if t >= 999: continue
+            dist_d = hav(to_lat, to_lon, dm["stop_lat"], dm["stop_lon"])
+            if dist_d > MTR_MAX_WALK: continue
+            wt = dist_d / WALK
+            key = f"md-{om['stop_id']}-{dm['stop_id']}"
+            if key in seen: continue
+            seen.add(key)
+            routes.append(_make_route("metro_direct", [_metro_leg(om, dm)], wf, wt))
+
+    # ── 4. Ônibus → Metrô → Ônibus (3 pernas) ─────────────────────────────────
+    for os_ in o_hubs[:3]:
+        ol = set(STOP_LINES_MAP.get(os_["stop_id"], []))
+        wf = hav(from_lat, from_lon, os_["stop_lat"], os_["stop_lon"]) / WALK
+        for hub_a, mtr_a_id in _HUB_METRO.items():
+            mtr_a = mtr_map.get(mtr_a_id)
+            if not mtr_a: continue
+            hub_a_stop = next((s for s in hub_stops if s["stop_id"] == hub_a), None)
+            if not hub_a_stop: continue
+            la_set = set(STOP_LINES_MAP.get(hub_a, []))
+            l1_opts = list(ol & la_set)[:2]
+            if not l1_opts: continue
+
+            for hub_b, mtr_b_id in _HUB_METRO.items():
+                if hub_a == hub_b: continue
+                mtr_b = mtr_map.get(mtr_b_id)
+                if not mtr_b: continue
+                t_metro = _mtr_time(mtr_a_id, mtr_b_id)
+                if t_metro >= 999: continue
+                hub_b_stop = next((s for s in hub_stops if s["stop_id"] == hub_b), None)
+                if not hub_b_stop: continue
+                lb_set = set(STOP_LINES_MAP.get(hub_b, []))
+
+                for ds_ in d_hubs[:3]:
+                    dl = set(STOP_LINES_MAP.get(ds_["stop_id"], []))
+                    wt = hav(to_lat, to_lon, ds_["stop_lat"], ds_["stop_lon"]) / WALK
+                    l3_opts = list(lb_set & dl)[:2]
+                    if not l3_opts: continue
+
+                    for l1 in l1_opts:
+                        for l3 in l3_opts:
+                            if l1 == l3 and hub_a == hub_b: continue
+                            key = f"bmb-{l1}-{mtr_a_id}-{mtr_b_id}-{l3}"
+                            if key in seen: continue
+                            seen.add(key)
+                            routes.append(_make_route("bus_metro_bus", [
+                                _bus_leg(os_, hub_a_stop, l1),
+                                _metro_leg(mtr_a, mtr_b),
+                                _bus_leg(hub_b_stop, ds_, l3),
+                            ], wf, wt))
+
+    # ── 5. Metrô → Ônibus (se origem perto de metrô) ──────────────────────────
+    for om in o_metro[:2]:
+        dist_o = hav(from_lat, from_lon, om["stop_lat"], om["stop_lon"])
+        if dist_o > MTR_MAX_WALK: continue
+        wf = dist_o / WALK
+        for hub_b, mtr_b_id in _HUB_METRO.items():
+            mtr_b = mtr_map.get(mtr_b_id)
+            if not mtr_b: continue
+            t_metro = _mtr_time(om["stop_id"], mtr_b_id)
+            if t_metro >= 999: continue
+            hub_b_stop = next((s for s in hub_stops if s["stop_id"] == hub_b), None)
+            if not hub_b_stop: continue
+            lb_set = set(STOP_LINES_MAP.get(hub_b, []))
+            for ds_ in d_hubs[:3]:
+                dl = set(STOP_LINES_MAP.get(ds_["stop_id"], []))
+                wt = hav(to_lat, to_lon, ds_["stop_lat"], ds_["stop_lon"]) / WALK
+                for l3 in list(lb_set & dl)[:2]:
+                    key = f"mb-{om['stop_id']}-{mtr_b_id}-{l3}"
+                    if key in seen: continue
+                    seen.add(key)
+                    routes.append(_make_route("metro_bus", [
+                        _metro_leg(om, mtr_b),
+                        _bus_leg(hub_b_stop, ds_, l3),
+                    ], wf, wt))
+
+    # Ordena: menos baldeações primeiro, depois menor tempo
     routes.sort(key=lambda r: (r["transfers"], r["total_duration_min"]))
+    # Remove duplicatas pelo par (primeiro hub, último hub) mantendo o mais rápido
+    best: dict[str, dict] = {}
+    for r in routes:
+        k = (r["legs"][0]["from_stop_id"], r["legs"][-1]["to_stop_id"])
+        if k not in best or r["total_duration_min"] < best[k]["total_duration_min"]:
+            best[k] = r
+    # Mantém variedade: até 2 rotas diretas + 2 com metrô + 2 com baldeação ônibus
+    final: list[dict] = []
+    buckets: dict[str, list] = {"direct": [], "metro": [], "transfer": []}
+    for r in sorted(routes, key=lambda x: x["total_duration_min"]):
+        if r["type"] == "direct":
+            if len(buckets["direct"]) < 2: buckets["direct"].append(r)
+        elif r.get("has_metro"):
+            if len(buckets["metro"]) < 2: buckets["metro"].append(r)
+        else:
+            if len(buckets["transfer"]) < 2: buckets["transfer"].append(r)
+    final = buckets["direct"] + buckets["metro"] + buckets["transfer"]
+    final.sort(key=lambda r: r["total_duration_min"])
 
     return {
-        "from": {"lat": from_lat, "lon": from_lon, "nearest_stop": o_stops[0] if o_stops else None},
-        "to":   {"lat": to_lat,   "lon": to_lon,   "nearest_stop": d_stops[0] if d_stops else None},
-        "routes": routes[:5],
+        "from": {"lat": from_lat, "lon": from_lon, "nearest_stop": nearest_any[0] if nearest_any else None},
+        "to":   {"lat": to_lat,   "lon": to_lon,   "nearest_stop": nearest_any_d[0] if nearest_any_d else None},
+        "routes": final[:6],
     }
 
 

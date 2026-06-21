@@ -126,18 +126,21 @@ export interface POI {
 
 // ---- Route Planning Types ----
 export interface RouteLeg {
+  leg_type: "bus" | "metro";
   from_stop_id: string; from_stop_name: string; from_lat: number; from_lon: number;
   to_stop_id: string;   to_stop_name: string;   to_lat: number;   to_lon: number;
   line_id: string; line_name: string; line_desc: string; line_tipo: string;
   duration_min: number;
 }
 export interface Route {
-  type: "direct" | "transfer";
+  type: "direct" | "transfer" | "metro_direct" | "metro_bus" | "bus_metro_bus";
   label: string;
   legs: RouteLeg[];
   total_duration_min: number;
   walk_min: number;
   transfers: number;
+  num_vehicles: number;
+  has_metro: boolean;
   transfer_stop?: string;
   comfort_pct: number;
   comfort: string;
