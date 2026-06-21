@@ -6,8 +6,9 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
-import hashlib, uuid, random, unicodedata, math as _math
+import hashlib, uuid, random, unicodedata, math as _math, time
 from datetime import date, datetime
+import httpx as _httpx
 
 app = FastAPI(title="MobiDF AI (Mock)", version="1.0.0-demo")
 
@@ -953,6 +954,119 @@ def plan_route(from_lat: float, from_lon: float, to_lat: float, to_lon: float):
         "to":   {"lat": to_lat,   "lon": to_lon,   "nearest_stop": d_stops[0] if d_stops else None},
         "routes": routes[:5],
     }
+
+
+# ── POI — Pontos de Interesse via Overpass (OpenStreetMap) ────────────────────
+_POI_TAGS: dict[str, list[tuple[str,str]]] = {
+    "feira":       [("amenity","marketplace"), ("shop","market")],
+    "hospital":    [("amenity","hospital")],
+    "ubs":         [("amenity","clinic"), ("amenity","health_centre"), ("healthcare","centre")],
+    "escola":      [("amenity","school")],
+    "universidade":[("amenity","university"), ("amenity","college")],
+    "shopping":    [("shop","mall")],
+    "parque":      [("leisure","park")],
+    "farmacia":    [("amenity","pharmacy")],
+    "banco":       [("amenity","bank")],
+    "restaurante": [("amenity","restaurant")],
+    "posto":       [("amenity","fuel")],
+    "supermercado":[("shop","supermarket")],
+    "padaria":     [("shop","bakery")],
+    "academia":    [("leisure","fitness_centre")],
+    "biblioteca":  [("amenity","library")],
+    "museu":       [("tourism","museum")],
+    "teatro":      [("amenity","theatre")],
+    "cinema":      [("amenity","cinema")],
+    "delegacia":   [("amenity","police")],
+    "correio":     [("amenity","post_office")],
+    "rodoviaria":  [("amenity","bus_station")],
+    "aeroporto":   [("aeroway","aerodrome")],
+    "hotel":       [("tourism","hotel"), ("tourism","hostel")],
+    "igrejas":     [("amenity","place_of_worship")],
+}
+
+# Cache simples: {query_key: (timestamp, result)}
+_poi_cache: dict[str, tuple[float, list]] = {}
+_POI_CACHE_TTL = 3600  # 1 hora
+
+def _poi_type(tags: dict) -> str:
+    for cat, cat_tags in _POI_TAGS.items():
+        for k, v in cat_tags:
+            if tags.get(k) == v:
+                return cat
+    return "local"
+
+@app.get("/api/v1/cidadao/poi/search")
+async def poi_search(q: str = ""):
+    q_clean = _normalize(q.strip())
+    if len(q_clean) < 2:
+        return []
+
+    now = time.time()
+    if q_clean in _poi_cache:
+        ts, cached = _poi_cache[q_clean]
+        if now - ts < _POI_CACHE_TTL:
+            return cached
+
+    # Bounding box do DF
+    BBOX = "-16.1,-48.4,-15.4,-47.3"
+
+    # Monta filtros OSM pelo keyword
+    tag_filters: list[tuple[str,str]] = []
+    for kw, kw_tags in _POI_TAGS.items():
+        if q_clean in kw or kw in q_clean:
+            tag_filters.extend(kw_tags)
+
+    if tag_filters:
+        parts = "\n".join(
+            f'  node["{k}"="{v}"]({BBOX});\n  way["{k}"="{v}"]({BBOX});'
+            for k, v in tag_filters
+        )
+        overpass_q = f"[out:json][timeout:12];\n(\n{parts}\n);\nout center 80;"
+    else:
+        # Busca livre por nome
+        q_escaped = q.replace('"', '\\"')
+        overpass_q = (
+            f'[out:json][timeout:12];\n'
+            f'node["name"~"{q_escaped}",i]({BBOX});\n'
+            f'out body 60;'
+        )
+
+    try:
+        async with _httpx.AsyncClient(timeout=14) as client:
+            resp = await client.post(
+                "https://overpass-api.de/api/interpreter",
+                data={"data": overpass_q},
+                headers={"Accept": "application/json", "User-Agent": "MobiDF-AI/1.0"},
+            )
+        elements = resp.json().get("elements", [])
+    except Exception:
+        return []
+
+    result = []
+    seen_names: set[str] = set()
+    for el in elements:
+        tags = el.get("tags", {})
+        name = tags.get("name", "").strip()
+        if not name or name in seen_names:
+            continue
+        seen_names.add(name)
+        lat = el.get("lat") or el.get("center", {}).get("lat")
+        lon = el.get("lon") or el.get("center", {}).get("lon")
+        if not lat or not lon:
+            continue
+        result.append({
+            "id":       str(el["id"]),
+            "name":     name,
+            "lat":      lat,
+            "lon":      lon,
+            "type":     _poi_type(tags),
+            "address":  tags.get("addr:street", tags.get("addr:suburb", "")),
+            "phone":    tags.get("phone", tags.get("contact:phone", "")),
+            "opening":  tags.get("opening_hours", ""),
+        })
+
+    _poi_cache[q_clean] = (now, result)
+    return result
 
 
 @app.get("/")

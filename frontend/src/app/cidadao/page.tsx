@@ -2,7 +2,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
 import { motion, AnimatePresence } from "framer-motion";
-import { api, type Stop, type NextTrip, type CartaoSaldo, type MetroLineSegment, type Route, type RoutePlan } from "@/lib/api";
+import { api, type Stop, type NextTrip, type CartaoSaldo, type MetroLineSegment, type Route, type RoutePlan, type POI } from "@/lib/api";
 import Logo from "@/components/ui/Logo";
 
 const RouteMap = dynamic(() => import("@/components/cidadao/RouteMap"), {
@@ -34,6 +34,34 @@ const METRO_COLORS: Record<string, string> = {
 };
 
 const ease: [number,number,number,number] = [0.16, 1, 0.3, 1];
+
+const POI_STYLE_MAP: Record<string, { emoji: string; color: string }> = {
+  feira:        { emoji:"🛒", color:"#f59e0b" },
+  hospital:     { emoji:"🏥", color:"#f43f5e" },
+  ubs:          { emoji:"🏥", color:"#fb923c" },
+  escola:       { emoji:"🏫", color:"#6366f1" },
+  universidade: { emoji:"🎓", color:"#7c3aed" },
+  shopping:     { emoji:"🏬", color:"#a855f7" },
+  parque:       { emoji:"🌳", color:"#22c55e" },
+  farmacia:     { emoji:"💊", color:"#10b981" },
+  banco:        { emoji:"🏦", color:"#3b82f6" },
+  restaurante:  { emoji:"🍽️", color:"#f97316" },
+  posto:        { emoji:"⛽", color:"#64748b" },
+  supermercado: { emoji:"🛒", color:"#eab308" },
+  padaria:      { emoji:"🥖", color:"#b45309" },
+  academia:     { emoji:"💪", color:"#8b5cf6" },
+  biblioteca:   { emoji:"📚", color:"#0ea5e9" },
+  museu:        { emoji:"🏛️", color:"#d97706" },
+  teatro:       { emoji:"🎭", color:"#ec4899" },
+  cinema:       { emoji:"🎬", color:"#8b5cf6" },
+  delegacia:    { emoji:"👮", color:"#1d4ed8" },
+  correio:      { emoji:"📮", color:"#fbbf24" },
+  rodoviaria:   { emoji:"🚌", color:"#7c3aed" },
+  aeroporto:    { emoji:"✈️", color:"#0ea5e9" },
+  hotel:        { emoji:"🏨", color:"#14b8a6" },
+  igrejas:      { emoji:"⛪", color:"#94a3b8" },
+  local:        { emoji:"📍", color:"#94a3b8" },
+};
 type Tab = "linhas" | "cartao" | "maria" | "rotas";
 
 /* ── Cores por ocupação ── */
@@ -237,6 +265,9 @@ export default function CidadaoPage() {
   const [routePlan,   setRoutePlan]   = useState<RoutePlan | null>(null);
   const [routeLoading,setRouteLoading]= useState(false);
   const [selectedRoute, setSelectedRoute] = useState<Route | null>(null);
+  const [poiQuery,     setPoiQuery]     = useState("");
+  const [pois,         setPois]         = useState<POI[]>([]);
+  const [poiLoading,   setPoiLoading]   = useState(false);
 
   const planRoute = useCallback(async (from: Pt, to: Pt) => {
     setRouteLoading(true); setRoutePlan(null); setSelectedRoute(null);
@@ -275,6 +306,19 @@ export default function CidadaoPage() {
     const t = setTimeout(() => api.cidadao.searchStops(toQuery).then(setToSugg).catch(()=>{}), 350);
     return () => clearTimeout(t);
   }, [toQuery]);
+
+  // Busca POIs quando usuário digita no campo de locais
+  useEffect(() => {
+    if (!poiQuery.trim() || poiQuery.length < 3) { setPois([]); return; }
+    const t = setTimeout(() => {
+      setPoiLoading(true);
+      api.cidadao.poiSearch(poiQuery)
+        .then(setPois)
+        .catch(() => setPois([]))
+        .finally(() => setPoiLoading(false));
+    }, 500);
+    return () => clearTimeout(t);
+  }, [poiQuery]);
 
   // O mapa é sempre visível na aba Linhas (carrega todas as paradas no mount)
   const showMap = tab === "linhas";
@@ -428,8 +472,14 @@ export default function CidadaoPage() {
             origin={fromPt}
             destination={toPt}
             legs={selectedRoute?.legs ?? []}
+            pois={pois}
             pickMode={pickMode}
             onMapClick={handleMapClick}
+            onPoiSelect={(poi, as) => {
+              const pt2 = { lat: poi.lat, lon: poi.lon, label: poi.name };
+              if (as === "origin")      { setFromPt(pt2); setFromQuery(poi.name); setFromSugg([]); if (toPt)   planRoute(pt2, toPt); }
+              else                      { setToPt(pt2);   setToQuery(poi.name);   setToSugg([]);   if (fromPt) planRoute(fromPt, pt2); }
+            }}
           />
           {/* Botões de modo de clique */}
           <div style={{ position:"absolute", bottom:10, left:"50%", transform:"translateX(-50%)",
@@ -627,6 +677,79 @@ export default function CidadaoPage() {
             {/* ══ ROTAS ══ */}
             {tab === "rotas" && (
               <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+
+                {/* ── Busca de Locais / POI ── */}
+                <div style={{ position:"relative" }}>
+                  <span style={{ position:"absolute", left:13, top:"50%", transform:"translateY(-50%)",
+                    fontSize:15, pointerEvents:"none" }}>🔍</span>
+                  <input
+                    style={{ width:"100%", padding:"12px 44px 12px 38px", borderRadius:14,
+                      border:"1.5px solid rgba(255,255,255,0.15)",
+                      background:"rgba(255,255,255,0.1)", color:"#fff", fontSize:13,
+                      outline:"none", boxSizing:"border-box" }}
+                    placeholder="Buscar local — ex: feira, hospital, parque…"
+                    value={poiQuery}
+                    onChange={e => { setPoiQuery(e.target.value); if (!e.target.value) setPois([]); }}
+                  />
+                  {poiLoading && (
+                    <div style={{ position:"absolute", right:13, top:"50%", transform:"translateY(-50%)",
+                      width:16, height:16, border:"2px solid rgba(255,255,255,0.2)",
+                      borderTopColor:"#c4b5fd", borderRadius:"50%", animation:"spin 0.7s linear infinite" }} />
+                  )}
+                  {!poiLoading && pois.length > 0 && (
+                    <button onClick={() => { setPois([]); setPoiQuery(""); }}
+                      style={{ position:"absolute", right:11, top:"50%", transform:"translateY(-50%)",
+                        background:"none", border:"none", color:"rgba(255,255,255,0.5)", cursor:"pointer",
+                        fontSize:16, lineHeight:1 }}>×</button>
+                  )}
+                </div>
+
+                {pois.length > 0 && (
+                  <div style={{ fontSize:10, color:"rgba(255,255,255,0.5)", fontWeight:700,
+                    textTransform:"uppercase", letterSpacing:"0.06em" }}>
+                    {pois.length} local{pois.length!==1?"is":""} encontrado{pois.length!==1?"s":""} · toque no pin no mapa ou na lista abaixo
+                  </div>
+                )}
+
+                {pois.length > 0 && (
+                  <div style={{ background:"rgba(255,255,255,0.06)", borderRadius:16,
+                    border:"1px solid rgba(255,255,255,0.1)", overflow:"hidden", maxHeight:200, overflowY:"auto" }}>
+                    {pois.slice(0,12).map((poi, i) => {
+                      const style = POI_STYLE_MAP[poi.type] ?? POI_STYLE_MAP.local;
+                      return (
+                        <div key={poi.id} style={{ display:"flex", alignItems:"center", gap:10, padding:"11px 14px",
+                          borderBottom: i < Math.min(pois.length,12)-1 ? "1px solid rgba(255,255,255,0.06)" : "none" }}>
+                          <span style={{ fontSize:18, flexShrink:0 }}>{style.emoji}</span>
+                          <div style={{ flex:1, minWidth:0 }}>
+                            <div style={{ fontSize:12, fontWeight:700, color:"#fff",
+                              overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{poi.name}</div>
+                            {poi.address && <div style={{ fontSize:10, color:"rgba(255,255,255,0.4)", marginTop:1 }}>{poi.address}</div>}
+                          </div>
+                          <div style={{ display:"flex", gap:5, flexShrink:0 }}>
+                            <button onClick={() => {
+                              const pt2 = { lat:poi.lat, lon:poi.lon, label:poi.name };
+                              setFromPt(pt2); setFromQuery(poi.name); setFromSugg([]);
+                              if (toPt) planRoute(pt2, toPt);
+                            }}
+                            style={{ padding:"4px 9px", borderRadius:99, border:"none", cursor:"pointer",
+                              background:"rgba(16,185,129,0.2)", color:"#34d399", fontSize:10, fontWeight:700 }}>
+                              De
+                            </button>
+                            <button onClick={() => {
+                              const pt2 = { lat:poi.lat, lon:poi.lon, label:poi.name };
+                              setToPt(pt2); setToQuery(poi.name); setToSugg([]);
+                              if (fromPt) planRoute(fromPt, pt2);
+                            }}
+                            style={{ padding:"4px 9px", borderRadius:99, border:"none", cursor:"pointer",
+                              background:"rgba(244,63,94,0.2)", color:"#fb7185", fontSize:10, fontWeight:700 }}>
+                              Para
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
 
                 {/* ── Inputs De / Para ── */}
                 {(["from","to"] as const).map((side) => {

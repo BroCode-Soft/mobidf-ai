@@ -70,8 +70,22 @@ export const api = {
     cartaoSaldo: (numero: string) => apiFetch<CartaoSaldo>(`/cidadao/cartao/${encodeURIComponent(numero)}/saldo`),
     planRoute: (fromLat: number, fromLon: number, toLat: number, toLon: number) =>
       apiFetch<RoutePlan>(`/cidadao/routes/plan?from_lat=${fromLat}&from_lon=${fromLon}&to_lat=${toLat}&to_lon=${toLon}`),
+    poiSearch: (q: string) =>
+      apiFetch<POI[]>(`/cidadao/poi/search?q=${encodeURIComponent(q)}`),
   },
 };
+
+// ---- POI Types ----
+export interface POI {
+  id: string;
+  name: string;
+  lat: number;
+  lon: number;
+  type: string;
+  address: string;
+  phone: string;
+  opening: string;
+}
 
 // ---- Route Planning Types ----
 export interface RouteLeg {
