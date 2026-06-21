@@ -13,60 +13,105 @@ import {
 } from "react-leaflet";
 import type { Stop, MetroLineSegment } from "@/lib/api";
 
-/* ── Metrô-DF — polylines da rota oficial ─────────────────────────────────
-   Espinha dorsal: Terminal Asa Norte → Asa Norte → Central → Asa Sul
-                   → Terminal Asa Sul → Guará → Taguatinga → Centro Metropolitano
-   Ramal Ceilândia (verde, M1): Centro Met. → Guariroba → Ceilândia Norte
-   Ramal Samambaia (laranja, M2): Centro Met. → Taguatinga Sul → Furnas → Samambaia
+/* ── Metrô-DF — geometria real (OSM way 94975101 + relation 420554/420556) ──
+   Tronco: Asa Norte → Central → Asa Sul → Shopping → Feira → Guará
+           → Arniqueiras → Águas Claras (bifurcação)
+   Verde (M1 Ceilândia):  Águas Claras → Concessionárias → ... → Ceilândia
+   Laranja (M2 Samambaia): Águas Claras → Taguatinga Sul → ... → Samambaia
 ── */
+
+// Tronco: aprox. Asa Norte + 53 pontos exatos do trilho OSM (way 94975101)
+//         + posições reais das estações Asa Sul → Águas Claras
 const METRO_SPINE: [number, number][] = [
-  [-15.7476, -47.8800], // Terminal Asa Norte
-  [-15.7553, -47.8852], // 115 Norte
-  [-15.7620, -47.8873], // 113 Norte
-  [-15.7688, -47.8889], // 111 Norte
-  [-15.7756, -47.8900], // 109 Norte
-  [-15.7824, -47.8908], // 107 Norte
-  [-15.7862, -47.8918], // 105 Norte
-  [-15.7880, -47.8928], // 103 Norte
-  [-15.7893, -47.8958], // C. Norte
-  [-15.7944, -47.8923], // Central
-  [-15.7988, -47.8924], // Galeria
-  [-15.8028, -47.8930], // C. Sul / Sarah
-  [-15.8078, -47.8935], // Asa Sul
-  [-15.8122, -47.8940], // 102 Sul
-  [-15.8166, -47.8945], // 104 Sul
-  [-15.8210, -47.8950], // 106 Sul
-  [-15.8254, -47.8957], // 108 Sul
-  [-15.8298, -47.8963], // 110 Sul
-  [-15.8342, -47.8968], // 112 Sul
-  [-15.8372, -47.9010], // 114 Sul
-  [-15.8390, -47.9110], // 116 Sul
-  [-15.8400, -47.9220], // Terminal Asa Sul
-  [-15.8313, -47.9315], // Shopping
-  [-15.8290, -47.9484], // Guará
-  [-15.8258, -47.9728], // Arniqueiras
-  [-15.8218, -47.9886], // Concessionárias
-  [-15.8196, -48.0005], // Estrada Parque
-  [-15.8360, -48.0256], // Águas Claras
-  [-15.8278, -48.0393], // Onyama
-  [-15.8192, -48.0583], // Praça do Relógio
-  [-15.8140, -48.0438], // Centro Metropolitano (bifurcação)
+  // ── Asa Norte (interpolado — OSM "Asa Norte" node -15.76280,-47.88395) ──
+  [-15.76280, -47.88400],
+  [-15.77025, -47.88411],
+  [-15.77770, -47.88423],
+  [-15.78514, -47.88434],
+  // ── Geometria exata do way OSM 94975101 (Central → perto de Terminal Asa Sul) ──
+  [-15.79259, -47.88445],
+  [-15.79323, -47.88467],
+  [-15.79370, -47.88482],
+  [-15.79448, -47.88508],
+  [-15.79522, -47.88533],
+  [-15.79611, -47.88565],
+  [-15.79629, -47.88569],
+  [-15.79658, -47.88569],
+  [-15.79692, -47.88563],
+  [-15.79729, -47.88555],
+  [-15.79768, -47.88557],
+  [-15.79800, -47.88562],
+  [-15.79841, -47.88575],
+  [-15.79879, -47.88587],
+  [-15.79947, -47.88610],
+  [-15.80004, -47.88630],
+  [-15.80085, -47.88656],
+  [-15.80173, -47.88686],
+  [-15.80235, -47.88709],
+  [-15.80321, -47.88752],
+  [-15.80362, -47.88776],
+  [-15.80410, -47.88811],
+  [-15.80496, -47.88880],
+  [-15.80571, -47.88947],
+  [-15.80683, -47.89041],
+  [-15.80747, -47.89096],
+  [-15.80810, -47.89152],
+  [-15.80883, -47.89217],
+  [-15.81006, -47.89336],
+  [-15.81050, -47.89378],
+  [-15.81110, -47.89438],
+  [-15.81171, -47.89500],
+  [-15.81274, -47.89608],
+  [-15.81344, -47.89687],
+  [-15.81420, -47.89776],
+  [-15.81496, -47.89868],
+  [-15.81576, -47.89974],
+  [-15.81599, -47.90003],
+  [-15.81603, -47.90008],
+  [-15.81894, -47.90403],
+  [-15.82161, -47.90772],
+  [-15.82281, -47.90938],
+  [-15.82387, -47.91084],
+  [-15.82454, -47.91177],
+  [-15.82669, -47.91475],
+  [-15.83059, -47.92014],
+  [-15.83141, -47.92128],
+  [-15.83356, -47.92408],
+  [-15.83381, -47.92446],
+  [-15.83408, -47.92488],
+  [-15.83436, -47.92538],
+  [-15.83472, -47.92616],
+  [-15.83587, -47.92920],
+  // ── Posições exatas das estações OSM (relation 420554) ──
+  [-15.83705, -47.93263], // Asa Sul (Terminal)
+  [-15.83240, -47.95067], // Shopping
+  [-15.82302, -47.97503], // Feira
+  [-15.82666, -47.98340], // Guará
+  [-15.83671, -48.01706], // Arniqueiras
+  [-15.84000, -48.02826], // Águas Claras (bifurcação)
 ];
-// Ramal Ceilândia (verde M1) — noroeste
+
+// Verde (Linha 1 Ceilândia) — posições exatas das estações OSM
 const METRO_CEILANDIA: [number, number][] = [
-  [-15.8140, -48.0438], // Centro Metropolitano
-  [-15.8256, -48.0718], // Guariroba
-  [-15.8357, -48.1028], // Ceilândia Sul
-  [-15.8265, -48.1118], // Ceilândia Centro
-  [-15.8090, -48.1137], // Ceilândia Norte
+  [-15.84000, -48.02826], // Águas Claras
+  [-15.83514, -48.03862], // Concessionárias
+  [-15.83236, -48.04528], // Estrada Parque
+  [-15.83326, -48.05634], // Praça do Relógio
+  [-15.83542, -48.08616], // Centro Metropolitano
+  [-15.83774, -48.10325], // Ceilândia Sul
+  [-15.83059, -48.10725], // Guariroba
+  [-15.82226, -48.11189], // Ceilândia Centro
+  [-15.81485, -48.11609], // Ceilândia Norte
+  [-15.80555, -48.12127], // Ceilândia (terminal)
 ];
-// Ramal Samambaia (laranja M2) — sul
+
+// Laranja (Linha 2 Samambaia) — posições exatas das estações OSM
 const METRO_SAMAMBAIA: [number, number][] = [
-  [-15.8140, -48.0438], // Centro Metropolitano
-  [-15.8248, -48.0495], // Taguatinga Sul
-  [-15.8430, -48.0594], // Furnas
-  [-15.8548, -48.0726], // Samambaia Sul
-  [-15.8650, -48.0889], // Samambaia
+  [-15.84000, -48.02826], // Águas Claras
+  [-15.85179, -48.04191], // Taguatinga Sul
+  [-15.86490, -48.05983], // Furnas
+  [-15.86899, -48.07158], // Samambaia Sul
+  [-15.87364, -48.08493], // Samambaia (terminal)
 ];
 
 /* ── Ícone de estação de metrô (diamante colorido) ── */

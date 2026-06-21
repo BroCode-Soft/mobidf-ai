@@ -2,8 +2,22 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
 import { motion, AnimatePresence } from "framer-motion";
-import { api, type Stop, type NextTrip, type CartaoSaldo, type MetroLineSegment } from "@/lib/api";
+import { api, type Stop, type NextTrip, type CartaoSaldo, type MetroLineSegment, type Route, type RoutePlan, type POI, type Parceiro } from "@/lib/api";
 import Logo from "@/components/ui/Logo";
+import AuthModal, { type MobiUser } from "@/components/cidadao/AuthModal";
+import QRCodeModal from "@/components/cidadao/QRCodeModal";
+import { useAnalytics, } from "@/lib/useAnalytics";
+import { trackEvent, fetchLiveStats, type LiveStats } from "@/lib/analytics";
+
+const RouteMap = dynamic(() => import("@/components/cidadao/RouteMap"), {
+  ssr: false,
+  loading: () => (
+    <div style={{ width:"100%", height:"100%", display:"flex", alignItems:"center",
+      justifyContent:"center", background:"rgba(255,255,255,0.04)", borderRadius:18 }}>
+      <div style={{ color:"rgba(255,255,255,0.35)", fontSize:12 }}>Carregando mapa…</div>
+    </div>
+  ),
+});
 
 /* Leaflet precisa de window — importado apenas no client */
 const StopsMap = dynamic(() => import("@/components/cidadao/StopsMap"), {
@@ -24,7 +38,112 @@ const METRO_COLORS: Record<string, string> = {
 };
 
 const ease: [number,number,number,number] = [0.16, 1, 0.3, 1];
-type Tab = "linhas" | "cartao" | "maria";
+
+const POI_STYLE_MAP: Record<string, { emoji: string; color: string }> = {
+  // Alimentação
+  restaurante:    { emoji:"🍽️", color:"#f97316" },
+  lanchonete:     { emoji:"🍔", color:"#fb923c" },
+  cafe:           { emoji:"☕", color:"#92400e" },
+  padaria:        { emoji:"🥖", color:"#b45309" },
+  acougue:        { emoji:"🥩", color:"#dc2626" },
+  hortifruti:     { emoji:"🥦", color:"#16a34a" },
+  sorvete:        { emoji:"🍦", color:"#ec4899" },
+  doces:          { emoji:"🍬", color:"#e879f9" },
+  delicatessen:   { emoji:"🧀", color:"#d97706" },
+  bar:            { emoji:"🍺", color:"#f59e0b" },
+  balada:         { emoji:"🎵", color:"#a21caf" },
+  bebidas:        { emoji:"🥤", color:"#0284c7" },
+  // Comércio alimentar
+  supermercado:   { emoji:"🛒", color:"#eab308" },
+  mercadinho:     { emoji:"🏪", color:"#ca8a04" },
+  feira:          { emoji:"🛒", color:"#f59e0b" },
+  // Saúde
+  hospital:       { emoji:"🏥", color:"#f43f5e" },
+  ubs:            { emoji:"🏥", color:"#fb923c" },
+  farmacia:       { emoji:"💊", color:"#10b981" },
+  dentista:       { emoji:"🦷", color:"#06b6d4" },
+  veterinario:    { emoji:"🐾", color:"#84cc16" },
+  otica:          { emoji:"👓", color:"#6366f1" },
+  // Educação
+  escola:         { emoji:"🏫", color:"#6366f1" },
+  creche:         { emoji:"🧒", color:"#818cf8" },
+  universidade:   { emoji:"🎓", color:"#7c3aed" },
+  // Finanças
+  banco:          { emoji:"🏦", color:"#3b82f6" },
+  caixa_eletronico:{ emoji:"💳", color:"#2563eb" },
+  cambio:         { emoji:"💱", color:"#1d4ed8" },
+  // Governo / segurança
+  delegacia:      { emoji:"👮", color:"#1d4ed8" },
+  bombeiros:      { emoji:"🚒", color:"#ef4444" },
+  correio:        { emoji:"📮", color:"#fbbf24" },
+  tribunal:       { emoji:"⚖️", color:"#78716c" },
+  orgao_publico:  { emoji:"🏛️", color:"#64748b" },
+  embaixada:      { emoji:"🏳️", color:"#475569" },
+  biblioteca:     { emoji:"📚", color:"#0ea5e9" },
+  // Transporte
+  rodoviaria:     { emoji:"🚌", color:"#7c3aed" },
+  aeroporto:      { emoji:"✈️", color:"#0ea5e9" },
+  posto:          { emoji:"⛽", color:"#64748b" },
+  lava_jato:      { emoji:"🚿", color:"#38bdf8" },
+  mecanica:       { emoji:"🔧", color:"#78716c" },
+  concessionaria: { emoji:"🚗", color:"#94a3b8" },
+  autopecas:      { emoji:"🔩", color:"#6b7280" },
+  bicicletaria:   { emoji:"🚲", color:"#22c55e" },
+  estacionamento: { emoji:"🅿️", color:"#475569" },
+  // Lazer / esportes
+  parque:         { emoji:"🌳", color:"#22c55e" },
+  academia:       { emoji:"💪", color:"#8b5cf6" },
+  esportes:       { emoji:"⚽", color:"#10b981" },
+  esportes_loja:  { emoji:"🏃", color:"#14b8a6" },
+  estadio:        { emoji:"🏟️", color:"#0d9488" },
+  piscina:        { emoji:"🏊", color:"#38bdf8" },
+  playground:     { emoji:"🛝", color:"#a3e635" },
+  lazer:          { emoji:"🎡", color:"#4ade80" },
+  // Cultura / entretenimento
+  teatro:         { emoji:"🎭", color:"#ec4899" },
+  cinema:         { emoji:"🎬", color:"#8b5cf6" },
+  museu:          { emoji:"🏛️", color:"#d97706" },
+  galeria:        { emoji:"🖼️", color:"#c084fc" },
+  atracoes:       { emoji:"🎠", color:"#f472b6" },
+  mirador:        { emoji:"🔭", color:"#60a5fa" },
+  cultura:        { emoji:"🎨", color:"#a855f7" },
+  cassino:        { emoji:"🎰", color:"#fbbf24" },
+  // Hospedagem
+  hotel:          { emoji:"🏨", color:"#14b8a6" },
+  // Bem-estar / beleza
+  salao:          { emoji:"💇", color:"#f9a8d4" },
+  barbearia:      { emoji:"✂️", color:"#94a3b8" },
+  spa:            { emoji:"🧖", color:"#f0abfc" },
+  tatuagem:       { emoji:"🖋️", color:"#334155" },
+  // Lojas
+  shopping:       { emoji:"🏬", color:"#a855f7" },
+  roupas:         { emoji:"👕", color:"#c084fc" },
+  calcados:       { emoji:"👟", color:"#818cf8" },
+  eletronicos:    { emoji:"📱", color:"#38bdf8" },
+  celulares:      { emoji:"📱", color:"#0ea5e9" },
+  informatica:    { emoji:"💻", color:"#3b82f6" },
+  ferragens:      { emoji:"🔨", color:"#92400e" },
+  moveis:         { emoji:"🛋️", color:"#78716c" },
+  floricultura:   { emoji:"💐", color:"#f472b6" },
+  petshop:        { emoji:"🐶", color:"#84cc16" },
+  livraria:       { emoji:"📖", color:"#6366f1" },
+  joalheria:      { emoji:"💍", color:"#fbbf24" },
+  presentes:      { emoji:"🎁", color:"#f43f5e" },
+  brinquedos:     { emoji:"🧸", color:"#fb923c" },
+  papelaria:      { emoji:"📝", color:"#a78bfa" },
+  fotografo:      { emoji:"📷", color:"#64748b" },
+  musica:         { emoji:"🎸", color:"#c084fc" },
+  lavanderia:     { emoji:"👕", color:"#67e8f9" },
+  agencia_viagem: { emoji:"🌍", color:"#34d399" },
+  ingressos:      { emoji:"🎟️", color:"#fb7185" },
+  // Religião
+  igrejas:        { emoji:"⛪", color:"#94a3b8" },
+  // Outros
+  comercio:       { emoji:"🏪", color:"#94a3b8" },
+  recarga_ev:     { emoji:"⚡", color:"#4ade80" },
+  local:          { emoji:"📍", color:"#94a3b8" },
+};
+type Tab = "linhas" | "cartao" | "maria" | "rotas";
 
 /* ── Cores por ocupação ── */
 const OCC_GRAD: Record<string, string> = {
@@ -214,6 +333,142 @@ export default function CidadaoPage() {
   const [cartaoLoading, setCartaoLoading] = useState(false);
   const [cartaoError, setCartaoError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  /* ── Rota ── */
+  type Pt = { lat: number; lon: number; label: string };
+  const [fromPt,      setFromPt]      = useState<Pt | null>(null);
+  const [toPt,        setToPt]        = useState<Pt | null>(null);
+  const [pickMode,    setPickMode]    = useState<"destination"|null>(null);
+  const [toQuery,     setToQuery]     = useState("");
+  const [toSugg,      setToSugg]      = useState<Stop[]>([]);
+  const [routeGpsLoading, setRouteGpsLoading] = useState(false);
+  const [routeGpsError,   setRouteGpsError]   = useState<string | null>(null);
+  const toPtRef = useRef<Pt | null>(null);
+  useEffect(() => { toPtRef.current = toPt; }, [toPt]);
+  const [routePlan,   setRoutePlan]   = useState<RoutePlan | null>(null);
+  const [routeLoading,setRouteLoading]= useState(false);
+  const [selectedRoute, setSelectedRoute] = useState<Route | null>(null);
+  const [poiQuery,     setPoiQuery]     = useState("");
+  const [pois,         setPois]         = useState<POI[]>([]);
+  const [poiLoading,   setPoiLoading]   = useState(false);
+
+  /* ── Analytics ── */
+  useAnalytics("cidadao");
+  const [liveOnline, setLiveOnline] = useState<number | null>(null);
+  useEffect(() => {
+    fetchLiveStats().then(s => s && setLiveOnline(s.online_now));
+    const t = setInterval(() => fetchLiveStats().then(s => s && setLiveOnline(s.online_now)), 30_000);
+    return () => clearInterval(t);
+  }, []);
+
+  /* ── Auth + Parceiros ── */
+  const [user,          setUser]          = useState<MobiUser | null>(null);
+  const [showAuth,      setShowAuth]      = useState(false);
+  const [qrParceiro,    setQrParceiro]    = useState<Parceiro | null>(null);
+  const [parceiros,     setParceiros]     = useState<Parceiro[]>([]);
+  const [parceirosPending, setParceirosPending] = useState<Parceiro | null>(null);
+
+  // Recupera usuário logado do localStorage
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("mobidf_user");
+      if (saved) setUser(JSON.parse(saved));
+    } catch { /* ignore */ }
+  }, []);
+
+  // Busca parceiros próximos quando há parada selecionada ou localização do usuário
+  useEffect(() => {
+    const lat = selectedStop?.stop_lat ?? fromPt?.lat;
+    const lon = selectedStop?.stop_lon ?? fromPt?.lon;
+    if (!lat || !lon) { setParceiros([]); return; }
+    api.cidadao.parceirosNearby(lat, lon, 1200)
+      .then(setParceiros)
+      .catch(() => setParceiros([]));
+  }, [selectedStop, fromPt]);
+
+  function handleVerDesconto(p: Parceiro) {
+    if (!user) {
+      setParceirosPending(p);
+      setShowAuth(true);
+    } else {
+      setQrParceiro(p);
+    }
+  }
+
+  function handleLogin(u: MobiUser) {
+    setUser(u);
+    setShowAuth(false);
+    trackEvent("login", u.email);
+    if (parceirosPending) {
+      setQrParceiro(parceirosPending);
+      setParceirosPending(null);
+    }
+  }
+
+  // Auto-detecta GPS ao entrar na aba Rotas e define fromPt automaticamente
+  useEffect(() => {
+    if (tab !== "rotas") return;
+    if (fromPt) return;
+    if (!navigator.geolocation) { setRouteGpsError("GPS não disponível neste dispositivo."); return; }
+    setRouteGpsLoading(true); setRouteGpsError(null);
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        const pt = { lat: pos.coords.latitude, lon: pos.coords.longitude, label: "Minha localização" };
+        setFromPt(pt);
+        setUserLoc({ lat: pos.coords.latitude, lon: pos.coords.longitude });
+        setRouteGpsLoading(false);
+        if (toPtRef.current) planRoute(pt, toPtRef.current);
+      },
+      err => {
+        setRouteGpsLoading(false);
+        if (err.code === 1) setRouteGpsError("Permissão de GPS negada. Toque em 🎯 para tentar novamente.");
+        else setRouteGpsError("Não foi possível obter sua localização.");
+      },
+      { timeout: 10000, enableHighAccuracy: true }
+    );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
+
+  const planRoute = useCallback(async (from: Pt, to: Pt) => {
+    setRouteLoading(true); setRoutePlan(null); setSelectedRoute(null);
+    trackEvent("route_planned", `${from.label}→${to.label}`);
+    try {
+      const plan = await api.cidadao.planRoute(from.lat, from.lon, to.lat, to.lon);
+      setRoutePlan(plan);
+      if (plan.routes.length > 0) setSelectedRoute(plan.routes[0]);
+    } catch { /* silencioso */ }
+    finally { setRouteLoading(false); }
+  }, []);
+
+  const handleMapClick = useCallback((lat: number, lon: number) => {
+    if (pickMode !== "destination") return;
+    const label = `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
+    const pt = { lat, lon, label };
+    setToPt(pt); setToQuery(label); setToSugg([]);
+    setPickMode(null);
+    if (fromPt) planRoute(fromPt, pt);
+  }, [pickMode, fromPt, planRoute]);
+
+  useEffect(() => {
+    if (!toQuery.trim() || toQuery.includes(",")) { setToSugg([]); return; }
+    const t = setTimeout(() => api.cidadao.searchStops(toQuery).then(setToSugg).catch(()=>{}), 350);
+    return () => clearTimeout(t);
+  }, [toQuery]);
+
+  // Busca POIs quando usuário digita no campo de locais
+  useEffect(() => {
+    if (!poiQuery.trim() || poiQuery.length < 3) { setPois([]); return; }
+    const t = setTimeout(() => {
+      setPoiLoading(true);
+      trackEvent("poi_search", poiQuery);
+      api.cidadao.poiSearch(poiQuery)
+        .then(setPois)
+        .catch(() => setPois([]))
+        .finally(() => setPoiLoading(false));
+    }, 500);
+    return () => clearTimeout(t);
+  }, [poiQuery]);
+
   // O mapa é sempre visível na aba Linhas (carrega todas as paradas no mount)
   const showMap = tab === "linhas";
 
@@ -292,6 +547,7 @@ export default function CidadaoPage() {
 
   const TABS: Array<{ id: Tab; icon: string; label: string }> = [
     { id:"linhas",   icon:"🚌", label:"Linhas"   },
+    { id:"rotas",    icon:"🗺️",  label:"Rotas"    },
     { id:"cartao",   icon:"💳", label:"Cartão"   },
     { id:"maria",    icon:"🌟", label:"Maria"    },
   ];
@@ -314,12 +570,25 @@ export default function CidadaoPage() {
 
         <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:18 }}>
           <Logo variant="full" height={30} />
-          <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:5,
-            padding:"4px 10px", borderRadius:99,
-            background:"rgba(16,185,129,0.15)", border:"1px solid rgba(16,185,129,0.25)" }}>
-            <span style={{ width:6, height:6, borderRadius:"50%", background:"#10b981",
-              boxShadow:"0 0 6px #10b981", animation:"pulse 2s infinite" }} />
-            <span style={{ fontSize:10, color:"#34d399", fontWeight:600 }}>Ao vivo</span>
+          <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:6 }}>
+            {liveOnline !== null && (
+              <div style={{ display:"flex", alignItems:"center", gap:4,
+                padding:"4px 9px", borderRadius:99,
+                background:"rgba(124,58,237,0.15)", border:"1px solid rgba(124,58,237,0.25)" }}>
+                <span style={{ width:5, height:5, borderRadius:"50%", background:"#a78bfa",
+                  boxShadow:"0 0 5px #a78bfa", animation:"pulse 2s infinite" }} />
+                <span style={{ fontSize:10, color:"#c4b5fd", fontWeight:700 }}>
+                  {liveOnline} online
+                </span>
+              </div>
+            )}
+            <div style={{ display:"flex", alignItems:"center", gap:5,
+              padding:"4px 10px", borderRadius:99,
+              background:"rgba(16,185,129,0.15)", border:"1px solid rgba(16,185,129,0.25)" }}>
+              <span style={{ width:6, height:6, borderRadius:"50%", background:"#10b981",
+                boxShadow:"0 0 6px #10b981", animation:"pulse 2s infinite" }} />
+              <span style={{ fontSize:10, color:"#34d399", fontWeight:600 }}>Ao vivo</span>
+            </div>
           </div>
         </div>
 
@@ -356,6 +625,38 @@ export default function CidadaoPage() {
           </div>
         )}
       </motion.header>
+
+      {/* ── Mapa de Rotas — sempre visível na aba Rotas ── */}
+      {tab === "rotas" && (
+        <div style={{ margin:"10px 18px 0", borderRadius:20, overflow:"hidden",
+          border:"1px solid rgba(255,255,255,0.12)", position:"relative", zIndex:5, height:340 }}>
+          <RouteMap
+            origin={fromPt}
+            destination={toPt}
+            legs={selectedRoute?.legs ?? []}
+            pois={pois}
+            pickMode={pickMode}
+            onMapClick={handleMapClick}
+            onPoiSelect={(poi, as) => {
+              if (as !== "destination") return;
+              const pt2 = { lat: poi.lat, lon: poi.lon, label: poi.name };
+              setToPt(pt2); setToQuery(poi.name); setToSugg([]);
+              if (fromPt) planRoute(fromPt, pt2);
+            }}
+          />
+          {/* Botão para definir destino no mapa */}
+          <div style={{ position:"absolute", bottom:10, left:"50%", transform:"translateX(-50%)",
+            zIndex:1000, display:"flex", gap:6 }}>
+            <button onClick={() => setPickMode(p => p==="destination" ? null : "destination")}
+              style={{ padding:"7px 14px", borderRadius:99, border:"none", cursor:"pointer",
+                fontSize:11, fontWeight:700,
+                background: pickMode==="destination" ? "#f43f5e" : "rgba(244,63,94,0.25)",
+                color:"#fff", boxShadow:"0 2px 8px rgba(0,0,0,0.3)" }}>
+              🏁 Tocar para definir destino
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ── Mapa — aparece quando há paradas ou localização GPS ── */}
       <AnimatePresence>
@@ -525,6 +826,550 @@ export default function CidadaoPage() {
                       </div>
                     )}
                   </>
+                )}
+
+                {/* ── Enquanto você espera ── */}
+                {parceiros.length > 0 && selectedStop && (
+                  <div style={{ marginTop: 8 }}>
+                    <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
+                      <div style={{ fontSize:10, fontWeight:800, color:"#818cf8",
+                        textTransform:"uppercase", letterSpacing:"0.08em" }}>
+                        ☕ Enquanto você espera
+                      </div>
+                      <div style={{ flex:1, height:1, background:"rgba(129,140,248,0.2)" }} />
+                      <div style={{ fontSize:9, color:"#475569" }}>parceiros verificados</div>
+                    </div>
+                    <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                      {parceiros.slice(0,3).map(p => (
+                        <div key={p.id} style={{
+                          background:"rgba(255,255,255,0.05)", borderRadius:14,
+                          border:"1px solid rgba(129,140,248,0.18)",
+                          padding:"12px 14px", display:"flex", alignItems:"flex-start", gap:12,
+                        }}>
+                          <div style={{
+                            width:40, height:40, borderRadius:11, flexShrink:0,
+                            background: p.cor + "22", border:`1.5px solid ${p.cor}55`,
+                            display:"flex", alignItems:"center", justifyContent:"center", fontSize:20,
+                          }}>
+                            {p.emoji}
+                          </div>
+                          <div style={{ flex:1, minWidth:0 }}>
+                            <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:2 }}>
+                              <span style={{ fontSize:13, fontWeight:800, color:"#f1f5f9" }}>
+                                {p.nome}
+                              </span>
+                              {p.verificado && (
+                                <span style={{ fontSize:9, color:"#4ade80", fontWeight:700 }}>✓</span>
+                              )}
+                            </div>
+                            <div style={{ fontSize:11, color:"#818cf8", fontWeight:700, marginBottom:3 }}>
+                              🎁 {p.desconto}
+                            </div>
+                            <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                              <span style={{ fontSize:10, color:"#64748b" }}>
+                                📍 {p.dist_m}m · {p.horario}
+                              </span>
+                            </div>
+                            <div style={{ display:"flex", gap:4, marginTop:6, flexWrap:"wrap" }}>
+                              {p.ods.map(o => (
+                                <span key={o} style={{ fontSize:9, fontWeight:700, color:"#818cf8",
+                                  background:"rgba(129,140,248,0.12)", borderRadius:99,
+                                  padding:"2px 7px", border:"1px solid rgba(129,140,248,0.2)" }}>
+                                  {o}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => handleVerDesconto(p)}
+                            style={{
+                              flexShrink:0, padding:"7px 12px", borderRadius:10,
+                              border:"none", cursor:"pointer", fontSize:11, fontWeight:800,
+                              background:"linear-gradient(135deg,#7c3aed,#6366f1)",
+                              color:"#fff", whiteSpace:"nowrap",
+                            }}
+                          >
+                            {user ? "Ver QR Code" : "Ver desconto"}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ══ ROTAS ══ */}
+            {tab === "rotas" && (
+              <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+
+                {/* ── Busca de Locais / POI ── */}
+                <div style={{ position:"relative" }}>
+                  <span style={{ position:"absolute", left:13, top:"50%", transform:"translateY(-50%)",
+                    fontSize:15, pointerEvents:"none" }}>🔍</span>
+                  <input
+                    style={{ width:"100%", padding:"12px 44px 12px 38px", borderRadius:14,
+                      border:"1.5px solid rgba(255,255,255,0.15)",
+                      background:"rgba(255,255,255,0.1)", color:"#fff", fontSize:13,
+                      outline:"none", boxSizing:"border-box" }}
+                    placeholder="Buscar local — ex: feira, hospital, parque…"
+                    value={poiQuery}
+                    onChange={e => { setPoiQuery(e.target.value); if (!e.target.value) setPois([]); }}
+                  />
+                  {poiLoading && (
+                    <div style={{ position:"absolute", right:13, top:"50%", transform:"translateY(-50%)",
+                      width:16, height:16, border:"2px solid rgba(255,255,255,0.2)",
+                      borderTopColor:"#c4b5fd", borderRadius:"50%", animation:"spin 0.7s linear infinite" }} />
+                  )}
+                  {!poiLoading && pois.length > 0 && (
+                    <button onClick={() => { setPois([]); setPoiQuery(""); }}
+                      style={{ position:"absolute", right:11, top:"50%", transform:"translateY(-50%)",
+                        background:"none", border:"none", color:"rgba(255,255,255,0.5)", cursor:"pointer",
+                        fontSize:16, lineHeight:1 }}>×</button>
+                  )}
+                </div>
+
+                {pois.length > 0 && (
+                  <div style={{ fontSize:10, color:"rgba(255,255,255,0.5)", fontWeight:700,
+                    textTransform:"uppercase", letterSpacing:"0.06em" }}>
+                    {pois.length} local{pois.length!==1?"is":""} encontrado{pois.length!==1?"s":""} · toque no pin no mapa ou na lista abaixo
+                  </div>
+                )}
+
+                {pois.length > 0 && (
+                  <div style={{ background:"rgba(255,255,255,0.06)", borderRadius:16,
+                    border:"1px solid rgba(255,255,255,0.1)", overflow:"hidden", maxHeight:200, overflowY:"auto" }}>
+                    {pois.slice(0,12).map((poi, i) => {
+                      const style = POI_STYLE_MAP[poi.type] ?? POI_STYLE_MAP.local;
+                      return (
+                        <div key={poi.id} style={{ display:"flex", alignItems:"center", gap:10, padding:"11px 14px",
+                          borderBottom: i < Math.min(pois.length,12)-1 ? "1px solid rgba(255,255,255,0.06)" : "none" }}>
+                          <span style={{ fontSize:18, flexShrink:0 }}>{style.emoji}</span>
+                          <div style={{ flex:1, minWidth:0 }}>
+                            <div style={{ fontSize:12, fontWeight:700, color:"#fff",
+                              overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{poi.name}</div>
+                            {poi.address && <div style={{ fontSize:10, color:"rgba(255,255,255,0.4)", marginTop:1 }}>{poi.address}</div>}
+                          </div>
+                          <button onClick={() => {
+                              const pt2 = { lat:poi.lat, lon:poi.lon, label:poi.name };
+                              setToPt(pt2); setToQuery(poi.name); setToSugg([]);
+                              if (fromPt) planRoute(fromPt, pt2);
+                            }}
+                            style={{ padding:"4px 9px", borderRadius:99, border:"none", cursor:"pointer",
+                              background:"rgba(244,63,94,0.2)", color:"#fb7185", fontSize:10, fontWeight:700, flexShrink:0 }}>
+                              Ir para
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* ── Origem: status de GPS automático ── */}
+                <div style={{ display:"flex", alignItems:"center", gap:10,
+                  padding:"10px 14px", borderRadius:14,
+                  background: fromPt ? "rgba(16,185,129,0.1)" : "rgba(255,255,255,0.06)",
+                  border: fromPt ? "1.5px solid rgba(16,185,129,0.3)" : "1.5px solid rgba(255,255,255,0.1)" }}>
+                  {routeGpsLoading ? (
+                    <>
+                      <div style={{ width:16, height:16, border:"2px solid rgba(255,255,255,0.2)",
+                        borderTopColor:"#10b981", borderRadius:"50%", animation:"spin 0.7s linear infinite",
+                        flexShrink:0 }} />
+                      <span style={{ fontSize:12, color:"rgba(255,255,255,0.5)" }}>Detectando sua localização…</span>
+                    </>
+                  ) : fromPt ? (
+                    <>
+                      <span style={{ fontSize:16, flexShrink:0 }}>📍</span>
+                      <div style={{ flex:1, minWidth:0 }}>
+                        <div style={{ fontSize:11, color:"#34d399", fontWeight:700 }}>PARTINDO DE</div>
+                        <div style={{ fontSize:12, color:"#fff", marginTop:1,
+                          overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                          {routePlan?.from.nearest_stop?.stop_name ?? "Sua localização"}
+                        </div>
+                      </div>
+                      <button onClick={() => {
+                        setRouteGpsLoading(true); setRouteGpsError(null); setFromPt(null);
+                        navigator.geolocation?.getCurrentPosition(pos => {
+                          const pt = { lat: pos.coords.latitude, lon: pos.coords.longitude, label: "Minha localização" };
+                          setFromPt(pt); setUserLoc({ lat: pos.coords.latitude, lon: pos.coords.longitude });
+                          setRouteGpsLoading(false);
+                          if (toPtRef.current) planRoute(pt, toPtRef.current);
+                        }, () => setRouteGpsLoading(false), { timeout: 8000 });
+                      }} style={{ background:"none", border:"none", color:"rgba(255,255,255,0.3)",
+                        cursor:"pointer", fontSize:12, flexShrink:0, padding:4 }} title="Atualizar localização">
+                        🔄
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <span style={{ fontSize:16, flexShrink:0 }}>📍</span>
+                      <div style={{ flex:1, minWidth:0 }}>
+                        <div style={{ fontSize:12, color: routeGpsError ? "#fb7185" : "rgba(255,255,255,0.4)" }}>
+                          {routeGpsError ?? "Aguardando localização…"}
+                        </div>
+                      </div>
+                      <button onClick={() => {
+                        if (!navigator.geolocation) return;
+                        setRouteGpsLoading(true); setRouteGpsError(null);
+                        navigator.geolocation.getCurrentPosition(pos => {
+                          const pt = { lat: pos.coords.latitude, lon: pos.coords.longitude, label: "Minha localização" };
+                          setFromPt(pt); setUserLoc({ lat: pos.coords.latitude, lon: pos.coords.longitude });
+                          setRouteGpsLoading(false);
+                          if (toPtRef.current) planRoute(pt, toPtRef.current);
+                        }, err => {
+                          setRouteGpsLoading(false);
+                          setRouteGpsError(err.code === 1 ? "Permissão negada." : "GPS indisponível.");
+                        }, { timeout: 8000, enableHighAccuracy: true });
+                      }} style={{ padding:"5px 12px", borderRadius:99, border:"none", cursor:"pointer",
+                        background:"rgba(99,102,241,0.3)", color:"#a5b4fc", fontSize:11, fontWeight:700, flexShrink:0 }}>
+                        🎯 Tentar
+                      </button>
+                    </>
+                  )}
+                </div>
+
+                {/* ── Destino ── */}
+                <div style={{ position:"relative" }}>
+                  <div style={{ display:"flex", gap:6 }}>
+                    <div style={{ flex:1, position:"relative" }}>
+                      <span style={{ position:"absolute", left:12, top:"50%", transform:"translateY(-50%)",
+                        fontSize:14, pointerEvents:"none" }}>🔴</span>
+                      <input
+                        style={{ width:"100%", padding:"12px 12px 12px 36px", borderRadius:14,
+                          border: toPt ? "1.5px solid rgba(244,63,94,0.4)" : "1.5px solid rgba(255,255,255,0.12)",
+                          background:"rgba(255,255,255,0.1)", color:"#fff", fontSize:13,
+                          outline:"none", boxSizing:"border-box" }}
+                        placeholder="Para onde você vai?"
+                        value={toQuery}
+                        onChange={e => { setToQuery(e.target.value); setToPt(null); }}
+                      />
+                    </div>
+                    <button onClick={() => setPickMode(p => p==="destination" ? null : "destination")}
+                      style={{ width:44, height:44, borderRadius:12, border:"none", cursor:"pointer",
+                        background: pickMode==="destination" ? "#f43f5e" : "rgba(255,255,255,0.08)",
+                        fontSize:18, flexShrink:0,
+                        display:"flex", alignItems:"center", justifyContent:"center" }}>
+                      📍
+                    </button>
+                  </div>
+
+                  {toSugg.length > 0 && (
+                    <div style={{ position:"absolute", left:0, right:0, top:"100%", zIndex:50,
+                      background:"#1e1b4b", borderRadius:12, overflow:"hidden",
+                      border:"1px solid rgba(255,255,255,0.12)", boxShadow:"0 8px 32px rgba(0,0,0,0.5)",
+                      maxHeight:200, overflowY:"auto" }}>
+                      {toSugg.slice(0,5).map(s => (
+                        <button key={s.stop_id} onClick={() => {
+                          const pt2 = { lat: s.stop_lat, lon: s.stop_lon, label: s.stop_name };
+                          setToPt(pt2); setToQuery(s.stop_name); setToSugg([]);
+                          if (fromPt) planRoute(fromPt, pt2);
+                        }}
+                        style={{ display:"block", width:"100%", padding:"11px 14px", textAlign:"left",
+                          background:"none", border:"none", borderBottom:"1px solid rgba(255,255,255,0.06)",
+                          cursor:"pointer", color:"#fff", fontSize:12 }}>
+                          🔴 {s.stop_name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Estado vazio */}
+                {!toPt && !routeLoading && fromPt && (
+                  <div style={{ textAlign:"center", padding:"20px 0",
+                    color:"rgba(255,255,255,0.35)", fontSize:13, lineHeight:1.8 }}>
+                    Digite o destino acima<br/>
+                    ou toque 📍 para marcar no mapa
+                  </div>
+                )}
+                {!fromPt && !routeGpsLoading && !routeLoading && (
+                  <div style={{ textAlign:"center", padding:"20px 0",
+                    color:"rgba(255,255,255,0.35)", fontSize:12 }}>
+                    Permita o acesso à localização para calcular a rota
+                  </div>
+                )}
+
+                {routeLoading && (
+                  <div style={{ textAlign:"center", padding:"28px 0",
+                    color:"rgba(255,255,255,0.4)", fontSize:13 }}>
+                    Calculando rotas…
+                  </div>
+                )}
+
+                {/* Resultados */}
+                {routePlan && routePlan.routes.length === 0 && !routeLoading && (
+                  <div style={{ textAlign:"center", padding:"24px 0",
+                    color:"rgba(255,255,255,0.35)", fontSize:13 }}>
+                    Nenhuma rota encontrada. Tente pontos mais próximos a paradas de ônibus.
+                  </div>
+                )}
+
+                {routePlan && routePlan.routes.length > 0 && (
+                  <>
+                    <div style={{ fontSize:10, color:"rgba(255,255,255,0.4)", fontWeight:700,
+                      textTransform:"uppercase", letterSpacing:"0.06em" }}>
+                      {routePlan.routes.length} opção{routePlan.routes.length!==1?"ões":""} encontrada{routePlan.routes.length!==1?"s":""}
+                    </div>
+                    {routePlan.routes.map((route, ri) => {
+                      const isSelected = selectedRoute === route;
+                      const pct = route.comfort_pct;
+                      const comfortColor = pct<40 ? "#10b981" : pct<65 ? "#f59e0b" : pct<80 ? "#f97316" : "#f43f5e";
+                      const hasMetro = route.has_metro;
+                      const isDirect = route.type === "direct";
+                      const accentColor = isDirect ? "#6366f1" : hasMetro ? "#22c55e" : "#f59e0b";
+                      const headerGrad = isDirect
+                        ? "linear-gradient(135deg,#6366f1,#818cf8)"
+                        : hasMetro
+                          ? "linear-gradient(135deg,#16a34a,#22c55e)"
+                          : "linear-gradient(135deg,#d97706,#f59e0b)";
+                      const headerIcon = isDirect ? "⚡" : hasMetro ? "🚇" : "🔀";
+
+                      const nBus  = route.legs.filter((l: {leg_type:string}) => l.leg_type === "bus").length;
+                      const nMtr  = route.legs.filter((l: {leg_type:string}) => l.leg_type === "metro").length;
+                      const subtitle = isDirect
+                        ? "Rota direta · 1 ônibus"
+                        : [nBus > 0 && `${nBus} ônibus`, nMtr > 0 && `${nMtr} metrô`]
+                            .filter(Boolean).join(" + ")
+                            + ` · ${route.transfers} baldeação${route.transfers > 1 ? "ões" : ""}`;
+
+                      return (
+                        <motion.div key={ri}
+                          initial={{ opacity:0, y:12 }} animate={{ opacity:1, y:0 }}
+                          transition={{ delay: ri*0.07 }}
+                          onClick={() => setSelectedRoute(route)}
+                          style={{ background:"#fff", borderRadius:20, padding:"16px 18px",
+                            cursor:"pointer", position:"relative", overflow:"hidden",
+                            boxShadow: isSelected
+                              ? `0 0 0 2px ${accentColor}, 0 4px 20px ${accentColor}33`
+                              : "0 2px 12px rgba(0,0,0,0.08)" }}>
+
+                          {/* Header */}
+                          <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12 }}>
+                            <div style={{ width:40, height:40, borderRadius:13, flexShrink:0,
+                              background: headerGrad,
+                              display:"flex", alignItems:"center", justifyContent:"center", fontSize:20 }}>
+                              {headerIcon}
+                            </div>
+                            <div style={{ flex:1, minWidth:0 }}>
+                              <div style={{ fontSize:12, fontWeight:800, color:"#0f172a",
+                                overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                                {/* Linha pills */}
+                                <span style={{ display:"flex", gap:4, flexWrap:"wrap" }}>
+                                  {route.legs.map((leg: {leg_type:string,line_name:string}, li: number) => (
+                                    <span key={li} style={{
+                                      padding:"1px 6px", borderRadius:6, fontSize:10, fontWeight:800,
+                                      background: leg.leg_type==="metro" ? "#16a34a22" : "#6366f122",
+                                      color: leg.leg_type==="metro" ? "#16a34a" : "#4338ca",
+                                      border: `1px solid ${leg.leg_type==="metro" ? "#16a34a44" : "#6366f144"}`,
+                                    }}>
+                                      {leg.leg_type==="metro" ? "🚇" : "🚌"} {leg.line_name.replace("Metrô ","M.")}
+                                    </span>
+                                  ))}
+                                </span>
+                              </div>
+                              <div style={{ fontSize:10, color:"#64748b", marginTop:3 }}>
+                                {subtitle}
+                              </div>
+                            </div>
+                            <div style={{ textAlign:"right", flexShrink:0 }}>
+                              <div style={{ fontSize:20, fontWeight:900, color:"#0f172a", lineHeight:1 }}>
+                                {route.total_duration_min}
+                              </div>
+                              <div style={{ fontSize:9, color:"#94a3b8", fontWeight:700 }}>min</div>
+                            </div>
+                          </div>
+
+                          {/* Timeline das pernas */}
+                          <div style={{ display:"flex", flexDirection:"column", gap:0, marginBottom:12 }}>
+                            {route.legs.map((leg: {leg_type:string,from_stop_name:string,line_name:string,duration_min:number,to_stop_name:string}, li: number) => {
+                              const isMetro = leg.leg_type === "metro";
+                              const nextLeg  = route.legs[li + 1] as {leg_type:string,line_name:string} | undefined;
+                              const dotColor = li===0 ? "#10b981" : isMetro ? "#22c55e" : "#7c3aed";
+                              const tagBg    = isMetro ? "#16a34a18" : "#6366f118";
+                              const tagColor = isMetro ? "#16a34a" : "#6366f1";
+
+                              // Instrução contextual de baldeação
+                              const transferTip = nextLeg ? (() => {
+                                const cur  = leg.leg_type;
+                                const next = nextLeg.leg_type;
+                                const nl   = nextLeg.line_name.replace("Metrô ","");
+                                if (cur==="bus"   && next==="bus")
+                                  return `Desça do ônibus e aguarde o ${nl} — confira o destino na placa frontal`;
+                                if (cur==="bus"   && next==="metro")
+                                  return `Desça do ônibus e acesse a estação de metrô · Valide o cartão na catraca`;
+                                if (cur==="metro" && next==="bus")
+                                  return `Saia da estação e aguarde o ônibus ${nl} no ponto mais próximo`;
+                                if (cur==="metro" && next==="metro")
+                                  return `Troque de plataforma na estação para pegar o ${nl}`;
+                                return `Troque para ${nl} no ponto de baldeação`;
+                              })() : null;
+
+                              return (
+                                <div key={li}>
+                                  {/* Parada de embarque */}
+                                  <div style={{ display:"flex", alignItems:"flex-start", gap:8, paddingBottom:4 }}>
+                                    <div style={{ display:"flex", flexDirection:"column", alignItems:"center", width:16, flexShrink:0 }}>
+                                      <div style={{ width:10, height:10, borderRadius:"50%", background:dotColor,
+                                        border:"2px solid #fff", boxShadow:`0 0 0 1px ${dotColor}`, marginTop:2 }} />
+                                      <div style={{ width:2, flex:1, minHeight:22, background:"#e2e8f0", marginTop:2 }} />
+                                    </div>
+                                    <div style={{ flex:1, minWidth:0, paddingBottom:2 }}>
+                                      <div style={{ fontSize:10, color:"#334155", fontWeight:700,
+                                        overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                                        {leg.from_stop_name.replace("Metrô ","").replace("Terminal ","T. ").replace("Rodoviária do Plano Piloto","Rodoviária PP")}
+                                      </div>
+                                      <div style={{ fontSize:9, color:"#94a3b8", marginTop:1 }}>
+                                        {isMetro ? "Embarque na plataforma do metrô" : "Embarque no ponto de ônibus"}
+                                      </div>
+                                    </div>
+                                    <div style={{ padding:"2px 7px", borderRadius:99, fontSize:9,
+                                      fontWeight:800, background:tagBg, color:tagColor, flexShrink:0,
+                                      display:"flex", alignItems:"center", gap:3, marginTop:1 }}>
+                                      {isMetro ? "🚇" : "🚌"} {leg.line_name.replace("Metrô ","M.")} · {leg.duration_min}min
+                                    </div>
+                                  </div>
+
+                                  {/* Conector de baldeação entre pernas */}
+                                  {nextLeg && (
+                                    <div style={{ display:"flex", alignItems:"flex-start", gap:8, marginBottom:4 }}>
+                                      <div style={{ display:"flex", flexDirection:"column", alignItems:"center", width:16, flexShrink:0 }}>
+                                        <div style={{ width:2, height:8, background:"#e2e8f0" }} />
+                                        <div style={{ width:16, height:16, borderRadius:5, background:"#f1f5f9",
+                                          border:"1px solid #e2e8f0", display:"flex", alignItems:"center",
+                                          justifyContent:"center", fontSize:9, flexShrink:0 }}>🔄</div>
+                                        <div style={{ width:2, height:8, background:"#e2e8f0" }} />
+                                      </div>
+                                      <div style={{ flex:1, background:"#f8fafc", borderRadius:10,
+                                        padding:"6px 10px", border:"1px solid #e2e8f0", marginBottom:2 }}>
+                                        <div style={{ fontSize:9, fontWeight:800, color:"#dc2626",
+                                          textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:2 }}>
+                                          Baldeação · {leg.to_stop_name.replace("Metrô ","").replace("Terminal ","").replace("Rodoviária do Plano Piloto","Rodoviária PP")}
+                                        </div>
+                                        <div style={{ fontSize:9, color:"#475569", lineHeight:1.4 }}>
+                                          {transferTip}
+                                        </div>
+                                        <div style={{ fontSize:9, color:"#94a3b8", marginTop:3 }}>
+                                          ⏱️ Espere ~8 min pelo próximo veículo
+                                        </div>
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {/* Última perna: parada de desembarque */}
+                                  {li === route.legs.length - 1 && (
+                                    <div style={{ display:"flex", alignItems:"flex-start", gap:8 }}>
+                                      <div style={{ width:16, flexShrink:0, display:"flex", justifyContent:"center", paddingTop:2 }}>
+                                        <div style={{ width:10, height:10, borderRadius:"50%", background:"#f43f5e",
+                                          border:"2px solid #fff", boxShadow:"0 0 0 1px #f43f5e" }} />
+                                      </div>
+                                      <div style={{ flex:1, minWidth:0 }}>
+                                        <div style={{ fontSize:10, color:"#334155", fontWeight:700,
+                                          overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                                          {leg.to_stop_name.replace("Metrô ","").replace("Terminal ","T. ").replace("Rodoviária do Plano Piloto","Rodoviária PP")}
+                                        </div>
+                                        <div style={{ fontSize:9, color:"#94a3b8", marginTop:1 }}>Desembarque aqui · seu destino</div>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+
+                          {/* Explicativo de baldeação (aparece quando há transferência) */}
+                          {route.transfers > 0 && isSelected && (
+                            <div style={{ background:"#fffbeb", border:"1px solid #fcd34d",
+                              borderRadius:12, padding:"10px 12px", marginBottom:12 }}>
+                              <div style={{ fontSize:10, fontWeight:800, color:"#92400e",
+                                marginBottom:6, display:"flex", alignItems:"center", gap:4 }}>
+                                💡 O que é baldeação?
+                              </div>
+                              <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+                                {[
+                                  ["🔄", "Você vai trocar de veículo no meio do caminho — é normal e seguro"],
+                                  ["🚏", "Desça no ponto indicado e aguarde o próximo ônibus ou metrô"],
+                                  ["🔍", "Confira sempre o destino escrito na placa frontal do ônibus antes de entrar"],
+                                  ["🎫", "Se usar cartão de transporte, é possível fazer integração tarifária — pergunte ao cobrador"],
+                                  ["🗺️", "Em dúvida no terminal, procure o painel de destinos ou pergunte ao fiscal"],
+                                  ["⏱️", "O tempo de espera médio em terminais do DF é de 5 a 12 minutos"],
+                                ].map(([icon, text], i) => (
+                                  <div key={i} style={{ display:"flex", gap:6, alignItems:"flex-start" }}>
+                                    <span style={{ fontSize:11, flexShrink:0 }}>{icon}</span>
+                                    <span style={{ fontSize:9, color:"#78350f", lineHeight:1.45 }}>{text}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Footer: caminhada + conforto */}
+                          <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+                            {route.walk_min > 0 && (
+                              <span style={{ padding:"3px 9px", borderRadius:99, fontSize:9, fontWeight:700,
+                                background:"rgba(100,116,139,0.1)", color:"#64748b" }}>
+                                🚶 {route.walk_min}min a pé
+                              </span>
+                            )}
+                            <span style={{ padding:"3px 9px", borderRadius:99, fontSize:9, fontWeight:700,
+                              background:`${comfortColor}18`, color:comfortColor }}>
+                              {pct<40?"🪑 Vai sentado":pct<65?"🪑 Provavelmente sentado":pct<80?"🧍 Em pé":"😰 Muito cheio"}
+                            </span>
+                            {hasMetro && (
+                              <span style={{ padding:"3px 9px", borderRadius:99, fontSize:9, fontWeight:700,
+                                background:"#16a34a18", color:"#16a34a" }}>
+                                🚇 Inclui Metrô DF
+                              </span>
+                            )}
+                          </div>
+                        </motion.div>
+                      );
+                    })}
+                  </>
+                )}
+
+                {/* ── Parceiros próximos ao destino ── */}
+                {parceiros.length > 0 && routePlan && (
+                  <div style={{ marginTop:4 }}>
+                    <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
+                      <div style={{ fontSize:10, fontWeight:800, color:"#818cf8",
+                        textTransform:"uppercase", letterSpacing:"0.08em" }}>
+                        🎁 Aproveite a viagem
+                      </div>
+                      <div style={{ flex:1, height:1, background:"rgba(129,140,248,0.2)" }} />
+                    </div>
+                    <div style={{ display:"flex", gap:10, overflowX:"auto", paddingBottom:4 }}>
+                      {parceiros.slice(0,4).map(p => (
+                        <div key={p.id} style={{
+                          flexShrink:0, width:220, background:"rgba(255,255,255,0.05)",
+                          borderRadius:14, border:"1px solid rgba(129,140,248,0.18)",
+                          padding:"12px 14px",
+                        }}>
+                          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
+                            <span style={{ fontSize:22 }}>{p.emoji}</span>
+                            <div>
+                              <div style={{ fontSize:12, fontWeight:800, color:"#f1f5f9", lineHeight:1.2 }}>
+                                {p.nome}
+                              </div>
+                              <div style={{ fontSize:9, color:"#64748b" }}>{p.dist_m}m · {p.horario}</div>
+                            </div>
+                          </div>
+                          <div style={{ fontSize:11, color:"#818cf8", fontWeight:700, marginBottom:10 }}>
+                            {p.desconto}
+                          </div>
+                          <button
+                            onClick={() => handleVerDesconto(p)}
+                            style={{
+                              width:"100%", padding:"7px 0", borderRadius:9, border:"none",
+                              background:"linear-gradient(135deg,#7c3aed,#6366f1)",
+                              color:"#fff", fontSize:11, fontWeight:800, cursor:"pointer",
+                            }}
+                          >
+                            {user ? "🎟️ Gerar QR Code" : "🔐 Ver desconto"}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 )}
               </div>
             )}
@@ -730,6 +1575,47 @@ export default function CidadaoPage() {
         .leaflet-popup-content-wrapper { border-radius: 12px !important; }
         .leaflet-popup-tip { display: none; }
       `}</style>
+
+      {/* ── Auth Modal ── */}
+      {showAuth && (
+        <AuthModal
+          onClose={() => { setShowAuth(false); setParceirosPending(null); }}
+          onLogin={handleLogin}
+        />
+      )}
+
+      {/* ── QR Code Modal ── */}
+      {qrParceiro && user && (
+        <QRCodeModal
+          parceiro={qrParceiro}
+          user={user}
+          onClose={() => setQrParceiro(null)}
+        />
+      )}
+
+      {/* ── Chip de usuário logado (bottom-left) ── */}
+      {user && (
+        <div style={{
+          position:"fixed", bottom:76, left:12, zIndex:200,
+          background:"rgba(15,23,42,0.92)", backdropFilter:"blur(12px)",
+          border:"1px solid rgba(129,140,248,0.25)", borderRadius:99,
+          padding:"5px 12px 5px 8px", display:"flex", alignItems:"center", gap:8,
+          cursor:"pointer",
+        }}
+          onClick={() => { localStorage.removeItem("mobidf_user"); setUser(null); }}
+          title="Clique para sair"
+        >
+          <div style={{ width:22, height:22, borderRadius:"50%",
+            background:"linear-gradient(135deg,#7c3aed,#6366f1)",
+            display:"flex", alignItems:"center", justifyContent:"center",
+            fontSize:11, fontWeight:900, color:"#fff" }}>
+            {user.nome[0].toUpperCase()}
+          </div>
+          <span style={{ fontSize:11, fontWeight:700, color:"#a5b4fc" }}>
+            {user.nome.split(" ")[0]}
+          </span>
+        </div>
+      )}
     </div>
   );
 }

@@ -68,8 +68,88 @@ export const api = {
       }),
     demoMaria: () => apiFetch<DemoMaria>("/cidadao/demo/maria"),
     cartaoSaldo: (numero: string) => apiFetch<CartaoSaldo>(`/cidadao/cartao/${encodeURIComponent(numero)}/saldo`),
+    planRoute: (fromLat: number, fromLon: number, toLat: number, toLon: number) =>
+      apiFetch<RoutePlan>(`/cidadao/routes/plan?from_lat=${fromLat}&from_lon=${fromLon}&to_lat=${toLat}&to_lon=${toLon}`),
+    poiSearch: (q: string) =>
+      apiFetch<POI[]>(`/cidadao/poi/search?q=${encodeURIComponent(q)}`),
+    parceirosNearby: (lat: number, lon: number, radiusM = 800) =>
+      apiFetch<Parceiro[]>(`/cidadao/parceiros/nearby?lat=${lat}&lon=${lon}&radius_m=${radiusM}`),
+    parceiros: () => apiFetch<Parceiro[]>("/cidadao/parceiros"),
+    gerarQRCode: (parceiroId: string, userToken: string) =>
+      apiFetch<QRCodeResult>(`/cidadao/parceiros/${parceiroId}/qrcode`, {
+        method: "POST",
+        body: JSON.stringify({ user_token: userToken }),
+      }),
   },
 };
+
+// ---- Parceiros / QR Code Types ----
+export interface Parceiro {
+  id: string;
+  nome: string;
+  tipo: string;
+  lat: number;
+  lon: number;
+  descricao: string;
+  desconto: string;
+  horario: string;
+  emoji: string;
+  cor: string;
+  ods: string[];
+  distancia_parada_m: number;
+  codigo_desconto: string;
+  verificado: boolean;
+  dist_m?: number;
+}
+
+export interface QRCodeResult {
+  qr_data: string;
+  code: string;
+  desconto: string;
+  parceiro_nome: string;
+  codigo_desconto: string;
+  valido_ate: string;
+  expires_ts: number;
+}
+
+// ---- POI Types ----
+export interface POI {
+  id: string;
+  name: string;
+  lat: number;
+  lon: number;
+  type: string;
+  address: string;
+  phone: string;
+  opening: string;
+}
+
+// ---- Route Planning Types ----
+export interface RouteLeg {
+  leg_type: "bus" | "metro";
+  from_stop_id: string; from_stop_name: string; from_lat: number; from_lon: number;
+  to_stop_id: string;   to_stop_name: string;   to_lat: number;   to_lon: number;
+  line_id: string; line_name: string; line_desc: string; line_tipo: string;
+  duration_min: number;
+}
+export interface Route {
+  type: "direct" | "transfer" | "metro_direct" | "metro_bus" | "bus_metro_bus";
+  label: string;
+  legs: RouteLeg[];
+  total_duration_min: number;
+  walk_min: number;
+  transfers: number;
+  num_vehicles: number;
+  has_metro: boolean;
+  transfer_stop?: string;
+  comfort_pct: number;
+  comfort: string;
+}
+export interface RoutePlan {
+  from: { lat: number; lon: number; nearest_stop: Stop | null };
+  to:   { lat: number; lon: number; nearest_stop: Stop | null };
+  routes: Route[];
+}
 
 // ---- Types ----
 export interface GestorDashboard {

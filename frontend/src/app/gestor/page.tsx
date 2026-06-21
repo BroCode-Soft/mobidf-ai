@@ -5,6 +5,7 @@ import Logo from "@/components/ui/Logo";
 import { motion, AnimatePresence } from "framer-motion";
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { api, type GestorDashboard, type Overlap, type VirtualTerminal, type ReinvestmentMonth, type FleetScore, type DiametralSuggestion, type Regiao } from "@/lib/api";
+import { fetchLiveStats, sendHeartbeat, type LiveStats } from "@/lib/analytics";
 
 const ease: [number,number,number,number] = [0.16, 1, 0.3, 1];
 const fmt = (v?: number) => `R$ ${Number(v ?? 0).toLocaleString("pt-BR", { minimumFractionDigits: 0 })}`;
@@ -82,6 +83,17 @@ export default function GestorPage() {
   const [criarLinha, setCriarLinha] = useState<{ origem: string; destino: string } | null>(null);
   const [novaOrigem, setNovaOrigem] = useState("");
   const [novaDestino, setNovaDestino] = useState("");
+  const [live, setLive] = useState<LiveStats | null>(null);
+
+  useEffect(() => {
+    sendHeartbeat("gestor");
+    fetchLiveStats().then(s => s && setLive(s));
+    const t = setInterval(() => {
+      sendHeartbeat("gestor");
+      fetchLiveStats().then(s => s && setLive(s));
+    }, 15_000);
+    return () => clearInterval(t);
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -210,6 +222,52 @@ export default function GestorPage() {
               {/* ══════ OVERVIEW ══════ */}
               {tab === "overview" && !loading && (
                 <div style={{ display:"flex", flexDirection:"column", gap:24 }}>
+
+                  {/* ── Live Users Panel ── */}
+                  {live && (
+                    <motion.div initial={{ opacity:0, y:12 }} animate={{ opacity:1, y:0 }}
+                      transition={{ duration:0.4 }}
+                      style={{ background:"linear-gradient(135deg,rgba(124,58,237,0.12),rgba(99,102,241,0.08))",
+                        border:"1px solid rgba(124,58,237,0.3)", borderRadius:16, padding:"18px 20px" }}>
+                      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:16 }}>
+                        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                          <span style={{ width:8, height:8, borderRadius:"50%", background:"#a78bfa",
+                            boxShadow:"0 0 8px #a78bfa", animation:"pulse 1.5s infinite", display:"inline-block" }} />
+                          <span style={{ fontSize:13, fontWeight:800, color:"var(--t1)" }}>Usuários em Tempo Real</span>
+                        </div>
+                        <span style={{ fontSize:10, color:"var(--t3)" }}>atualiza a cada 15s</span>
+                      </div>
+                      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(120px,1fr))", gap:10 }}>
+                        {[
+                          { emoji:"🟢", label:"Online agora",      value: live.online_now,         color:"#4ade80" },
+                          { emoji:"👥", label:"Total de sessões",  value: live.sessions_total,      color:"#a78bfa" },
+                          { emoji:"🗺️", label:"Rotas (1h)",        value: live.routes_1h,           color:"#60a5fa" },
+                          { emoji:"🔍", label:"Buscas POI (1h)",   value: live.poi_searches_1h,     color:"#fb923c" },
+                          { emoji:"🎟️", label:"QR Codes (1h)",     value: live.qr_generated_1h,     color:"#f472b6" },
+                          { emoji:"🔑", label:"Logins (1h)",       value: live.logins_1h,           color:"#fbbf24" },
+                        ].map(k => (
+                          <div key={k.label} style={{ background:"rgba(255,255,255,0.04)", borderRadius:10,
+                            padding:"10px 12px", textAlign:"center", border:"1px solid rgba(255,255,255,0.06)" }}>
+                            <div style={{ fontSize:20, marginBottom:4 }}>{k.emoji}</div>
+                            <div style={{ fontSize:22, fontWeight:900, color:k.color }}>{k.value}</div>
+                            <div style={{ fontSize:9, color:"var(--t3)", marginTop:2, fontWeight:600,
+                              textTransform:"uppercase", letterSpacing:"0.04em" }}>{k.label}</div>
+                          </div>
+                        ))}
+                      </div>
+                      {Object.keys(live.pages_active).length > 0 && (
+                        <div style={{ marginTop:12, display:"flex", gap:8, flexWrap:"wrap" }}>
+                          <span style={{ fontSize:10, color:"var(--t3)" }}>Onde estão:</span>
+                          {Object.entries(live.pages_active).map(([page, count]) => (
+                            <span key={page} style={{ fontSize:10, fontWeight:700, color:"#c4b5fd",
+                              background:"rgba(124,58,237,0.15)", borderRadius:99, padding:"2px 8px" }}>
+                              {page || "início"} ({count})
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </motion.div>
+                  )}
 
                   {/* KPI grid */}
                   <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))", gap:16 }}>

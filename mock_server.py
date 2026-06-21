@@ -6,10 +6,241 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
-import hashlib, uuid, random, unicodedata, math as _math
+from contextlib import asynccontextmanager
+import hashlib, uuid, random, unicodedata, math as _math, time, asyncio
 from datetime import date, datetime
+import httpx as _httpx
 
-app = FastAPI(title="MobiDF AI (Mock)", version="1.0.0-demo")
+# ── POI: mapeamento OSM tag → categoria display ────────────────────────────────
+_OSM_TO_CAT: dict[str, str] = {
+    # Alimentação
+    "restaurant":"restaurante","food_court":"restaurante","fast_food":"lanchonete",
+    "cafe":"cafe","bar":"bar","pub":"bar","biergarten":"bar","ice_cream":"sorvete",
+    "confectionery":"doces","deli":"delicatessen","bakery":"padaria","butcher":"acougue",
+    "greengrocer":"hortifruti","alcohol":"bebidas","beverages":"bebidas",
+    # Comércio alimentar
+    "supermarket":"supermercado","convenience":"mercadinho","marketplace":"feira",
+    "market":"feira","farm":"feira",
+    # Saúde
+    "hospital":"hospital","clinic":"ubs","health_centre":"ubs","doctors":"ubs",
+    "pharmacy":"farmacia","dentist":"dentista","veterinary":"veterinario",
+    "optician":"otica",
+    # Educação
+    "school":"escola","kindergarten":"creche","childcare":"creche",
+    "university":"universidade","college":"universidade",
+    # Serviços financeiros
+    "bank":"banco","atm":"caixa_eletronico","bureau_de_change":"cambio",
+    # Governo / segurança
+    "police":"delegacia","fire_station":"bombeiros","post_office":"correio",
+    "courthouse":"tribunal","townhall":"orgao_publico","government":"orgao_publico",
+    "embassy":"embaixada","library":"biblioteca",
+    # Transporte
+    "bus_station":"rodoviaria","aerodrome":"aeroporto","ferry_terminal":"balsa",
+    "fuel":"posto","car_wash":"lava_jato","car_repair":"mecanica",
+    "car":"concessionaria","car_parts":"autopecas","bicycle":"bicicletaria",
+    # Lazer / esportes
+    "park":"parque","garden":"parque","nature_reserve":"parque",
+    "fitness_centre":"academia","gym":"academia","sports_centre":"esportes",
+    "stadium":"estadio","swimming_pool":"piscina","playground":"playground",
+    "leisure_centre":"lazer",
+    # Cultura / entretenimento
+    "theatre":"teatro","cinema":"cinema","museum":"museu","gallery":"galeria",
+    "attraction":"atracoes","viewpoint":"mirador","arts_centre":"cultura",
+    "nightclub":"balada","casino":"cassino",
+    # Hospedagem
+    "hotel":"hotel","hostel":"hotel","motel":"hotel","guest_house":"hotel",
+    # Saúde / bem-estar
+    "beauty":"salao","hairdresser":"barbearia","massage":"spa","spa":"spa",
+    "tattoo":"tatuagem",
+    # Lojas
+    "mall":"shopping","clothes":"roupas","shoes":"calcados",
+    "electronics":"eletronicos","mobile_phone":"celulares","computer":"informatica",
+    "hardware":"ferragens","furniture":"moveis","sports":"esportes_loja",
+    "florist":"floricultura","pet":"petshop","books":"livraria",
+    "jewelry":"joalheria","gift":"presentes","toys":"brinquedos",
+    "stationery":"papelaria","copyshop":"papelaria","photo":"fotografo",
+    "musical_instrument":"musica","outdoor":"esportes_loja",
+    "laundry":"lavanderia","dry_cleaning":"lavanderia",
+    "travel_agency":"agencia_viagem","ticket":"ingressos",
+    # Religião
+    "place_of_worship":"igrejas",
+    # Outros
+    "parking":"estacionamento","yes":"comercio","charging_station":"recarga_ev",
+}
+
+# Keyword (normalizado) → lista de tipos para filtrar
+_KW_TO_TYPES: dict[str, list[str]] = {
+    "feira":["feira"],"mercado":["feira","supermercado"],"mercadao":["feira"],
+    "hospital":["hospital"],"ubs":["ubs"],"posto saude":["ubs"],"clinica":["ubs"],
+    "saude":["hospital","ubs","dentista","farmacia"],
+    "farmacia":["farmacia"],"remedio":["farmacia"],
+    "escola":["escola","creche"],"colegio":["escola"],"creche":["creche"],
+    "universidade":["universidade"],"faculdade":["universidade"],"unb":["universidade"],
+    "shopping":["shopping"],"mall":["shopping"],
+    "parque":["parque"],"jardim":["parque"],"natureza":["parque"],
+    "academia":["academia"],"gym":["academia"],"ginasio":["academia"],
+    "banco":["banco"],"agencia":["banco"],"caixa":["banco","caixa_eletronico"],
+    "restaurante":["restaurante","lanchonete"],"comida":["restaurante","lanchonete","cafe"],
+    "lanchonete":["lanchonete"],"fast food":["lanchonete"],"fastfood":["lanchonete"],
+    "padaria":["padaria"],"cafe":["cafe"],"cafeteria":["cafe"],
+    "bar":["bar"],"pub":["bar"],"boteco":["bar"],
+    "supermercado":["supermercado","mercadinho"],"mercadinho":["mercadinho"],
+    "posto":["posto"],"gasolina":["posto"],"combustivel":["posto"],
+    "delegacia":["delegacia"],"policia":["delegacia"],
+    "bombeiro":["bombeiros"],"defesa civil":["bombeiros"],
+    "correio":["correio"],"sedex":["correio"],
+    "biblioteca":["biblioteca"],"livro":["biblioteca","livraria"],
+    "livraria":["livraria"],
+    "museu":["museu"],"galeria":["galeria","museu"],
+    "teatro":["teatro"],"cinema":["cinema"],"filme":["cinema"],
+    "hotel":["hotel"],"pousada":["hotel"],"hostel":["hotel"],
+    "rodoviaria":["rodoviaria"],"onibus":["rodoviaria"],
+    "aeroporto":["aeroporto"],"voo":["aeroporto"],
+    "igrejas":["igrejas"],"igreja":["igrejas"],"templo":["igrejas"],
+    "dentista":["dentista"],"odontologo":["dentista"],
+    "veterinario":["veterinario"],"pet":["petshop","veterinario"],
+    "petshop":["petshop"],"animal":["petshop","veterinario"],
+    "otica":["otica"],"oculos":["otica"],
+    "mecanica":["mecanica"],"mecanico":["mecanica"],"oficina":["mecanica"],
+    "lavajato":["lava_jato"],"lavar carro":["lava_jato"],
+    "autoparts":["autopecas"],"pecas":["autopecas"],
+    "barbearia":["barbearia"],"barbeiro":["barbearia"],"cabeleireiro":["barbearia","salao"],
+    "salao":["salao"],"beleza":["salao","barbearia","spa"],
+    "spa":["spa"],"massagem":["spa"],
+    "roupas":["roupas"],"moda":["roupas","calcados"],"calcados":["calcados"],
+    "informatica":["informatica","eletronicos"],"computador":["informatica"],
+    "celular":["celulares"],"smartphone":["celulares"],
+    "eletronico":["eletronicos"],"eletrodomestico":["eletronicos"],
+    "ferramenta":["ferragens"],"construcao":["ferragens"],
+    "moveis":["moveis"],"decoracao":["moveis"],
+    "esportes":["esportes","academia","esportes_loja"],"esporte":["esportes","academia"],
+    "estadio":["estadio"],"arena":["estadio"],
+    "piscina":["piscina"],"natacao":["piscina"],
+    "flores":["floricultura"],"floricultura":["floricultura"],
+    "lavanderia":["lavanderia"],"roupa suja":["lavanderia"],
+    "brinquedo":["brinquedos"],"crianca":["brinquedos","creche","playground"],
+    "doce":["doces","sorvete"],"sorvete":["sorvete"],
+    "acougue":["acougue"],"carne":["acougue"],
+    "hortifruti":["hortifruti"],"verdura":["hortifruti"],"fruta":["hortifruti"],
+    "joalheria":["joalheria"],"joia":["joalheria"],
+    "tatuagem":["tatuagem"],"piercing":["tatuagem"],
+    "turismo":["atracoes","museu","mirador"],"turista":["atracoes","hotel"],
+    "camping":["parque"],"trilha":["parque"],
+    "balada":["balada"],"night":["balada"],"boate":["balada"],
+    "recarga":["recarga_ev"],"eletrico":["recarga_ev"],
+    "orgao publico":["orgao_publico"],"governo":["orgao_publico"],
+    "embaixada":["embaixada"],"consulado":["embaixada"],
+}
+
+# ── Paradas WFS (carregadas do stops_data.json) ───────────────────────────────
+_WFS_STOPS: list[dict] = []  # paradas reais do SEMOB
+
+def _load_wfs_stops() -> None:
+    global _WFS_STOPS
+    import os, json as _json
+    path = os.path.join(os.path.dirname(__file__), "stops_data.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            _WFS_STOPS = _json.load(f)
+        print(f"[STOPS] {len(_WFS_STOPS):,} paradas carregadas do stops_data.json")
+    except FileNotFoundError:
+        print("[STOPS] stops_data.json não encontrado — usando mock padrão")
+    except Exception as e:
+        print(f"[STOPS] Erro ao carregar stops_data.json: {e}")
+
+# ── In-memory store de todos os POIs do DF ────────────────────────────────────
+_ALL_POIS: list[dict] = []
+_pois_loaded = False
+
+async def _load_pois() -> None:
+    global _ALL_POIS, _pois_loaded
+    BBOX = "-16.1,-48.4,-15.4,-47.3"
+
+    queries = [
+        # 1. Todos os nodes/ways com nome e qualquer tag relevante
+        f"[out:json][timeout:60];(\n"
+        f'  node["name"]["amenity"]({BBOX});\n'
+        f'  node["name"]["shop"]({BBOX});\n'
+        f'  node["name"]["leisure"]({BBOX});\n'
+        f'  node["name"]["tourism"]({BBOX});\n'
+        f'  node["name"]["healthcare"]({BBOX});\n'
+        f'  node["name"]["office"]({BBOX});\n'
+        f'  node["name"]["aeroway"]({BBOX});\n'
+        f'  way["name"]["amenity"]({BBOX});\n'
+        f'  way["name"]["shop"]({BBOX});\n'
+        f'  way["name"]["leisure"]({BBOX});\n'
+        f'  way["name"]["tourism"]({BBOX});\n'
+        f'  way["name"]["healthcare"]({BBOX});\n'
+        f');\nout center 8000;',
+        # 2. Redes/marcas (McDonald's, Carrefour, Itaú…) sem nome explícito
+        f"[out:json][timeout:30];(\n"
+        f'  node["brand"]({BBOX});\n'
+        f'  node["operator"]["amenity"]({BBOX});\n'
+        f');\nout body 2000;',
+    ]
+
+    all_elements: list = []
+    try:
+        async with _httpx.AsyncClient(timeout=70) as client:
+            for q in queries:
+                try:
+                    r = await client.post(
+                        "https://overpass-api.de/api/interpreter",
+                        data={"data": q},
+                        headers={"Accept": "application/json", "User-Agent": "MobiDF-AI/1.0"},
+                    )
+                    all_elements.extend(r.json().get("elements", []))
+                except Exception as e:
+                    print(f"[POI] query error: {e}")
+    except Exception as e:
+        print(f"[POI] client error: {e}")
+
+    seen: set[str] = set()
+    pois: list[dict] = []
+    for el in all_elements:
+        tags = el.get("tags", {})
+        name = (tags.get("name") or tags.get("brand") or "").strip()
+        if not name: continue
+        key = f"{name}_{el['id']}"
+        if key in seen: continue
+        seen.add(key)
+
+        lat = el.get("lat") or el.get("center", {}).get("lat")
+        lon = el.get("lon") or el.get("center", {}).get("lon")
+        if not lat or not lon: continue
+
+        cat = "local"
+        for osm_key in ("amenity", "shop", "leisure", "tourism", "healthcare", "aeroway", "office"):
+            val = tags.get(osm_key, "")
+            if val in _OSM_TO_CAT:
+                cat = _OSM_TO_CAT[val]; break
+            elif val and cat == "local":
+                cat = "comercio"
+
+        pois.append({
+            "id":         str(el["id"]),
+            "name":       name,
+            "name_lower": _normalize(name),
+            "lat":        lat,
+            "lon":        lon,
+            "type":       cat,
+            "address":    tags.get("addr:street", tags.get("addr:suburb", "")),
+            "phone":      tags.get("phone", tags.get("contact:phone", "")),
+            "opening":    tags.get("opening_hours", ""),
+        })
+
+    _ALL_POIS = pois
+    _pois_loaded = True
+    print(f"[POI] {len(pois):,} pontos de interesse carregados do OpenStreetMap")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    _load_wfs_stops()
+    asyncio.create_task(_load_pois())
+    yield
+
+app = FastAPI(title="MobiDF AI (Mock)", version="1.0.0-demo", lifespan=lifespan)
 
 def _normalize(text: str) -> str:
     """Remove acentos e normaliza para minúsculas — 'Ceilândia' → 'ceilandia'."""
@@ -312,74 +543,86 @@ STOP_LINES_MAP: dict[str, list[str]] = {
     "SOL-NASC":  ["906","187"],
 }
 
-# ── Estações do Metrô-DF — rota oficial ───────────────────────
-# Linha Ceilândia (verde):  Terminal Asa Norte → Central → Asa Sul → Terminal Asa Sul
-#                           → Guará → Taguatinga → Centro Metropolitano → Ceilândia Norte
-# Linha Samambaia (laranja): bifurcação em Centro Metropolitano → Samambaia
+# ── Estações do Metrô-DF — coordenadas reais (OSM relation 420554/420556) ──
+# Tronco: Terminal Asa Norte → Central → Asa Sul → Shopping → Guará → Arniqueiras → Águas Claras
+# Bifurcação em Águas Claras:
+#   Verde (Ceilândia):  Conc. → Est.Parque → Praça do Relógio → Centro Met → Ceilândia Sul
+#                       → Guariroba → Ceilândia Centro → Ceilândia Norte → Ceilândia
+#   Laranja (Samambaia): Taguatinga Sul → Furnas → Samambaia Sul → Samambaia
 _MC = "#22c55e"   # verde — Linha Ceilândia
 _MS = "#f97316"   # laranja — Linha Samambaia
 
-def _s(sid, name, lat, lon, linha="ceilandia", ta="Ceilândia Norte", tb="Terminal Asa Norte",
+def _s(sid, name, lat, lon, linha="ceilandia", ta="Ceilândia", tb="Terminal Asa Norte",
         fp=6, fn=10):
-    cor = _MC if linha == "ceilandia" else _MS
-    if "ceilandia,samambaia" in linha:
-        cor = _MC
+    cor = _MC if "ceilandia" in linha else _MS
     return {"stop_id": sid, "stop_name": name, "stop_lat": lat, "stop_lon": lon,
             "type": "metro", "linha_metro": linha, "cor_metro": cor,
             "freq_pico": fp, "freq_normal": fn, "terminus_a": ta, "terminus_b": tb}
 
 METRO_STATIONS: list[dict] = [
-    # ── TRECHO ASA NORTE (Terminal Asa Norte → Central) ──────────
-    _s("MTR-T-NORTE",   "Terminal Asa Norte (Metrô)", -15.7476, -47.8800),
-    _s("MTR-115-N",     "Metrô 115 Norte",            -15.7553, -47.8852),
-    _s("MTR-113-N",     "Metrô 113 Norte",            -15.7620, -47.8873),
-    _s("MTR-111-N",     "Metrô 111 Norte",            -15.7688, -47.8889),
-    _s("MTR-109-N",     "Metrô 109 Norte",            -15.7756, -47.8900),
-    _s("MTR-107-N",     "Metrô 107 Norte",            -15.7824, -47.8908),
-    _s("MTR-105-N",     "Metrô 105 Norte",            -15.7862, -47.8918),
-    _s("MTR-103-N",     "Metrô 103 Norte",            -15.7880, -47.8928),
-    # ── ÁREA CENTRAL ─────────────────────────────────────────────
-    _s("MTR-C-NORTE",   "Metrô Cruzeiro Norte",       -15.7893, -47.8958),
-    _s("MTR-CENTRAL",   "Metrô Central",              -15.7944, -47.8923),
-    _s("MTR-GALERIA",   "Metrô Galeria",              -15.7988, -47.8924),
-    # ── TRECHO ASA SUL (Central → Terminal Asa Sul) ───────────────
-    _s("MTR-C-SUL",     "Metrô C. Sul / Sarah",       -15.8028, -47.8930),
-    _s("MTR-ASA-SUL",   "Metrô Asa Sul",              -15.8078, -47.8935),
-    _s("MTR-102-S",     "Metrô 102 Sul",              -15.8122, -47.8940),
-    _s("MTR-104-S",     "Metrô 104 Sul",              -15.8166, -47.8945),
-    _s("MTR-106-S",     "Metrô 106 Sul",              -15.8210, -47.8950),
-    _s("MTR-108-S",     "Metrô 108 Sul",              -15.8254, -47.8957),
-    _s("MTR-110-S",     "Metrô 110 Sul",              -15.8298, -47.8963),
-    _s("MTR-112-S",     "Metrô 112 Sul",              -15.8342, -47.8968),
-    _s("MTR-114-S",     "Metrô 114 Sul",              -15.8372, -47.9010),
-    _s("MTR-116-S",     "Metrô 116 Sul",              -15.8390, -47.9110),
-    _s("MTR-T-ASA-SUL", "Terminal Asa Sul (Metrô)",   -15.8400, -47.9220),
-    # ── TRECHO GUARÁ (Terminal Asa Sul → Guará) ───────────────────
-    _s("MTR-SHOPPING",  "Metrô Shopping",             -15.8313, -47.9315),
-    _s("MTR-GUARA",     "Metrô Guará",                -15.8290, -47.9484),
-    # ── TRECHO TAGUATINGA (Guará → Centro Metropolitano) ─────────
-    _s("MTR-ARNIQ",     "Metrô Arniqueiras",          -15.8258, -47.9728),
-    _s("MTR-CONCESS",   "Metrô Concessionárias",      -15.8218, -47.9886),
-    _s("MTR-EST-PARQ",  "Metrô Estrada Parque",       -15.8196, -48.0005),
-    _s("MTR-AG-CLARAS", "Metrô Águas Claras",         -15.8360, -48.0256),
-    _s("MTR-ONYAMA",    "Metrô Onyama",               -15.8278, -48.0393),
-    _s("MTR-PRACA-REL", "Metrô Praça do Relógio",     -15.8192, -48.0583),
-    # ── BIFURCAÇÃO ───────────────────────────────────────────────
-    _s("MTR-CENTRO-MET","Metrô Centro Metropolitano", -15.8140, -48.0438,
-       linha="ceilandia,samambaia", ta="Ceilândia Norte", tb="Samambaia", fp=6, fn=10),
-    # ── LINHA CEILÂNDIA — ramal noroeste ─────────────────────────
-    _s("MTR-GUARIROBA", "Metrô Guariroba",            -15.8256, -48.0718),
-    _s("MTR-CEI-SUL",   "Metrô Ceilândia Sul",        -15.8357, -48.1028),
-    _s("MTR-CEI-CENTRO","Metrô Ceilândia Centro",     -15.8265, -48.1118),
-    _s("MTR-CEI-NORTE", "Metrô Ceilândia Norte",      -15.8090, -48.1137),
-    # ── LINHA SAMAMBAIA — ramal sul ───────────────────────────────
-    _s("MTR-TAG-SUL",   "Metrô Taguatinga Sul",       -15.8248, -48.0495,
+    # ── TRECHO ASA NORTE (Terminal Asa Norte → Central) — coords aproximadas ──
+    _s("MTR-T-NORTE",   "Terminal Asa Norte (Metrô)", -15.7628, -47.8840,
+       linha="ceilandia,samambaia", ta="Ceilândia / Samambaia", tb="Terminal Asa Norte"),
+    _s("MTR-113-N",     "Metrô 113 Norte",            -15.7677, -47.8856,
+       linha="ceilandia,samambaia", ta="Ceilândia / Samambaia", tb="Terminal Asa Norte"),
+    _s("MTR-111-N",     "Metrô 111 Norte",            -15.7725, -47.8866,
+       linha="ceilandia,samambaia", ta="Ceilândia / Samambaia", tb="Terminal Asa Norte"),
+    _s("MTR-109-N",     "Metrô 109 Norte",            -15.7773, -47.8871,
+       linha="ceilandia,samambaia", ta="Ceilândia / Samambaia", tb="Terminal Asa Norte"),
+    _s("MTR-107-N",     "Metrô 107 Norte",            -15.7820, -47.8875,
+       linha="ceilandia,samambaia", ta="Ceilândia / Samambaia", tb="Terminal Asa Norte"),
+    _s("MTR-105-N",     "Metrô 105 Norte",            -15.7851, -47.8879,
+       linha="ceilandia,samambaia", ta="Ceilândia / Samambaia", tb="Terminal Asa Norte"),
+    # ── ÁREA CENTRAL — coordenadas reais OSM ─────────────────────
+    _s("MTR-CENTRAL",   "Metrô Central",              -15.79323, -47.88467,
+       linha="ceilandia,samambaia", ta="Ceilândia / Samambaia", tb="Terminal Asa Norte"),
+    _s("MTR-GALERIA",   "Metrô Galeria",              -15.79947, -47.88610,
+       linha="ceilandia,samambaia", ta="Ceilândia / Samambaia", tb="Terminal Asa Norte"),
+    # ── TRECHO ASA SUL — coordenadas reais OSM ───────────────────
+    _s("MTR-102-S",     "Metrô 102 Sul",              -15.80571, -47.88944,
+       linha="ceilandia,samambaia", ta="Ceilândia / Samambaia", tb="Terminal Asa Norte"),
+    _s("MTR-106-S",     "Metrô 106 Sul",              -15.81496, -47.89868,
+       linha="ceilandia,samambaia", ta="Ceilândia / Samambaia", tb="Terminal Asa Norte"),
+    _s("MTR-108-S",     "Metrô 108 Sul",              -15.81896, -47.90403,
+       linha="ceilandia,samambaia", ta="Ceilândia / Samambaia", tb="Terminal Asa Norte"),
+    _s("MTR-110-S",     "Metrô 110 Sul",              -15.82284, -47.90938,
+       linha="ceilandia,samambaia", ta="Ceilândia / Samambaia", tb="Terminal Asa Norte"),
+    _s("MTR-112-S",     "Metrô 112 Sul",              -15.82672, -47.91475,
+       linha="ceilandia,samambaia", ta="Ceilândia / Samambaia", tb="Terminal Asa Norte"),
+    _s("MTR-114-S",     "Metrô 114 Sul",              -15.83059, -47.92014,
+       linha="ceilandia,samambaia", ta="Ceilândia / Samambaia", tb="Terminal Asa Norte"),
+    _s("MTR-T-ASA-SUL", "Terminal Asa Sul (Metrô)",   -15.83705, -47.93263,
+       linha="ceilandia,samambaia", ta="Ceilândia / Samambaia", tb="Terminal Asa Norte"),
+    # ── TRECHO GUARÁ — coordenadas reais OSM ─────────────────────
+    _s("MTR-SHOPPING",  "Metrô Shopping",             -15.83240, -47.95067,
+       linha="ceilandia,samambaia", ta="Ceilândia / Samambaia", tb="Terminal Asa Norte"),
+    _s("MTR-FEIRA",     "Metrô Feira",                -15.82302, -47.97503,
+       linha="ceilandia,samambaia", ta="Ceilândia / Samambaia", tb="Terminal Asa Norte"),
+    _s("MTR-GUARA",     "Metrô Guará",                -15.82666, -47.98340,
+       linha="ceilandia,samambaia", ta="Ceilândia / Samambaia", tb="Terminal Asa Norte"),
+    _s("MTR-ARNIQ",     "Metrô Arniqueiras",          -15.83671, -48.01706,
+       linha="ceilandia,samambaia", ta="Ceilândia / Samambaia", tb="Terminal Asa Norte"),
+    # ── BIFURCAÇÃO: Águas Claras — coordenadas reais OSM ─────────
+    _s("MTR-AG-CLARAS", "Metrô Águas Claras",         -15.84000, -48.02826,
+       linha="ceilandia,samambaia", ta="Ceilândia / Samambaia", tb="Terminal Asa Norte", fp=6, fn=10),
+    # ── LINHA VERDE (Ceilândia) — coordenadas reais OSM ──────────
+    _s("MTR-CONCESS",   "Metrô Concessionárias",      -15.83514, -48.03862),
+    _s("MTR-EST-PARQ",  "Metrô Estrada Parque",       -15.83236, -48.04528),
+    _s("MTR-PRACA-REL", "Metrô Praça do Relógio",     -15.83326, -48.05634),
+    _s("MTR-CENTRO-MET","Metrô Centro Metropolitano", -15.83542, -48.08616),
+    _s("MTR-CEI-SUL",   "Metrô Ceilândia Sul",        -15.83774, -48.10325),
+    _s("MTR-GUARIROBA", "Metrô Guariroba",            -15.83059, -48.10725),
+    _s("MTR-CEI-CENTRO","Metrô Ceilândia Centro",     -15.82226, -48.11189),
+    _s("MTR-CEI-NORTE", "Metrô Ceilândia Norte",      -15.81485, -48.11609),
+    _s("MTR-CEILANDIA", "Metrô Ceilândia",            -15.80555, -48.12127),
+    # ── LINHA LARANJA (Samambaia) — coordenadas reais OSM ────────
+    _s("MTR-TAG-SUL",   "Metrô Taguatinga Sul",       -15.85179, -48.04191,
        linha="samambaia", ta="Samambaia", tb="Terminal Asa Norte", fp=8, fn=14),
-    _s("MTR-FURNAS",    "Metrô Furnas",               -15.8430, -48.0594,
+    _s("MTR-FURNAS",    "Metrô Furnas",               -15.86490, -48.05983,
        linha="samambaia", ta="Samambaia", tb="Terminal Asa Norte", fp=8, fn=14),
-    _s("MTR-SAMBA-SUL", "Metrô Samambaia Sul",        -15.8548, -48.0726,
+    _s("MTR-SAMBA-SUL", "Metrô Samambaia Sul",        -15.86899, -48.07158,
        linha="samambaia", ta="Samambaia", tb="Terminal Asa Norte", fp=8, fn=14),
-    _s("MTR-SAMAMBAIA", "Metrô Samambaia",            -15.8650, -48.0889,
+    _s("MTR-SAMAMBAIA", "Metrô Samambaia",            -15.87364, -48.08493,
        linha="samambaia", ta="Samambaia", tb="Terminal Asa Norte", fp=8, fn=14),
 ]
 
@@ -600,16 +843,50 @@ def metro_stations_endpoint():
 @app.get("/api/v1/cidadao/stops/all-map")
 def all_stops_map():
     """Retorna TODAS as paradas de ônibus + estações de metrô para exibição no mapa."""
-    bus   = [{"type": "bus", **{k: v for k, v in s.items() if k not in ("type",)}} for s in STOPS]
-    metro = list(METRO_STATIONS)
-    return bus + metro
+    # Usa paradas WFS reais se disponíveis, senão fallback para mock
+    bus_source = _WFS_STOPS if _WFS_STOPS else STOPS
+    bus = [
+        {"type": "bus", "stop_id": s["stop_id"], "stop_name": s["stop_name"],
+         "stop_lat": s["stop_lat"], "stop_lon": s["stop_lon"]}
+        for s in bus_source
+    ]
+    return bus + list(METRO_STATIONS)
 
 @app.get("/api/v1/cidadao/metro/lines")
 def metro_lines_endpoint():
-    """Mock retorna [] — frontend usa fallback hardcoded.
-    Em modo real (real_server.py) retorna geometria WFS do GeoServer SEMOB.
-    """
-    return []
+    """Gera as polylines a partir das coordenadas reais OSM do Metrô-DF."""
+    # Tronco: Terminal Asa Norte → ... → Arniqueiras → Águas Claras (bifurcação)
+    # Verde: Águas Claras → Conc. → Est.Parque → Praça do Relógio → Centro Met → Ceilândia
+    # Laranja: Águas Claras → Taguatinga Sul → Furnas → Samambaia Sul → Samambaia
+    ORDER_SHARED = [
+        "MTR-T-NORTE","MTR-113-N","MTR-111-N","MTR-109-N","MTR-107-N","MTR-105-N",
+        "MTR-CENTRAL","MTR-GALERIA",
+        "MTR-102-S","MTR-106-S","MTR-108-S","MTR-110-S","MTR-112-S","MTR-114-S",
+        "MTR-T-ASA-SUL","MTR-SHOPPING","MTR-FEIRA","MTR-GUARA",
+        "MTR-ARNIQ","MTR-AG-CLARAS",
+    ]
+    ORDER_CEI = [
+        "MTR-AG-CLARAS","MTR-CONCESS","MTR-EST-PARQ","MTR-PRACA-REL",
+        "MTR-CENTRO-MET","MTR-CEI-SUL","MTR-GUARIROBA",
+        "MTR-CEI-CENTRO","MTR-CEI-NORTE","MTR-CEILANDIA",
+    ]
+    ORDER_SAM = [
+        "MTR-AG-CLARAS","MTR-TAG-SUL","MTR-FURNAS","MTR-SAMBA-SUL","MTR-SAMAMBAIA",
+    ]
+
+    station_map = {s["stop_id"]: s for s in METRO_STATIONS}
+
+    def coords(order):
+        return [
+            [station_map[sid]["stop_lat"], station_map[sid]["stop_lon"]]
+            for sid in order if sid in station_map
+        ]
+
+    return [
+        {"linha": "ceilandia,samambaia", "cor": "#22c55e", "coords": coords(ORDER_SHARED)},
+        {"linha": "ceilandia",           "cor": "#22c55e", "coords": coords(ORDER_CEI)},
+        {"linha": "samambaia",           "cor": "#f97316", "coords": coords(ORDER_SAM)},
+    ]
 
 @app.get("/api/v1/cidadao/stops/search")
 def search_stops(q: str = "", limit: int = 50):
@@ -617,8 +894,9 @@ def search_stops(q: str = "", limit: int = 50):
     if not q.strip():
         return []
     q_norm = _normalize(q)
+    bus_source = _WFS_STOPS if _WFS_STOPS else STOPS
     scored = []
-    for s in list(STOPS) + list(METRO_STATIONS):
+    for s in bus_source + list(METRO_STATIONS):
         name_norm = _normalize(s["stop_name"])
         if q_norm not in name_norm:
             continue
@@ -627,7 +905,8 @@ def search_stops(q: str = "", limit: int = 50):
         else:                              priority = 2
         scored.append((priority, s["stop_name"], s))
     scored.sort(key=lambda x: (x[0], x[1]))
-    return [s for _, _, s in scored][:limit]
+    return [{"type": s.get("type","bus"), **{k: v for k,v in s.items() if k!="type"}}
+            for _, _, s in scored][:limit]
 
 @app.get("/api/v1/cidadao/stops/nearby")
 def stops_nearby(lat: float = -15.7942, lon: float = -47.8825, radius_m: int = 500):
@@ -636,11 +915,14 @@ def stops_nearby(lat: float = -15.7942, lon: float = -47.8825, radius_m: int = 5
         dlat = (s["stop_lat"] - lat) * 111000
         dlon = (s["stop_lon"] - lon) * 111000 * math.cos(math.radians(lat))
         return math.sqrt(dlat**2 + dlon**2)
-    all_stops = list(STOPS) + list(METRO_STATIONS)
-    result = [{"dist_m": round(dist(s)), **{k: v for k, v in s.items()}} for s in all_stops]
+    bus_source = _WFS_STOPS if _WFS_STOPS else STOPS
+    all_stops = bus_source + list(METRO_STATIONS)
+    result = [{"dist_m": round(dist(s)), "type": s.get("type","bus"),
+               **{k: v for k, v in s.items() if k not in ("dist_m","type")}}
+              for s in all_stops]
     within = [r for r in result if r["dist_m"] <= radius_m]
     result_sorted = sorted(result, key=lambda x: x["dist_m"])
-    return (within or result_sorted)[:15]
+    return (within or result_sorted[:5])[:20]
 
 @app.get("/api/v1/cidadao/trips/next")
 def next_trips(origin_stop_id: str = "", dest_stop_id: Optional[str] = None, limit: int = 12):
@@ -826,6 +1108,580 @@ def suggest_reallocation(event_id: str):
         for p in candidates[:6]
     ]
     return {"event": event, "suggestions": suggestions, "total_nearby": len(already_close)}
+
+# ── Dados para roteamento multi-modal com metrô ───────────────────────────────
+# Hub de ônibus → estação de metrô mais próxima
+_HUB_METRO: dict[str, str] = {
+    "CEI-N":    "MTR-CEI-NORTE",
+    "CEI-S":    "MTR-CEI-CENTRO",
+    "RODO":     "MTR-CENTRAL",
+    "ASA-S-W3": "MTR-T-ASA-SUL",
+    "ASA-N-W3": "MTR-T-NORTE",
+    "UNB":      "MTR-T-NORTE",
+    "AG-CL":    "MTR-AG-CLARAS",
+    "TAG-N":    "MTR-CONCESS",
+    "TAG-S":    "MTR-TAG-SUL",
+    "SAM-N":    "MTR-SAMAMBAIA",
+    "GUA":      "MTR-GUARA",
+}
+
+# Ordem das estações por linha (para calcular tempo de viagem)
+_MTR_VERDE = [
+    "MTR-T-NORTE","MTR-113-N","MTR-111-N","MTR-109-N","MTR-107-N","MTR-105-N",
+    "MTR-CENTRAL","MTR-GALERIA","MTR-102-S","MTR-106-S","MTR-108-S","MTR-110-S",
+    "MTR-112-S","MTR-114-S","MTR-T-ASA-SUL","MTR-SHOPPING","MTR-FEIRA","MTR-GUARA",
+    "MTR-ARNIQ","MTR-AG-CLARAS","MTR-CONCESS","MTR-EST-PARQ","MTR-PRACA-REL",
+    "MTR-CENTRO-MET","MTR-CEI-SUL","MTR-GUARIROBA","MTR-CEI-CENTRO",
+    "MTR-CEI-NORTE","MTR-CEILANDIA",
+]
+_MTR_LARANJA = [
+    "MTR-T-NORTE","MTR-113-N","MTR-111-N","MTR-109-N","MTR-107-N","MTR-105-N",
+    "MTR-CENTRAL","MTR-GALERIA","MTR-102-S","MTR-106-S","MTR-108-S","MTR-110-S",
+    "MTR-112-S","MTR-114-S","MTR-T-ASA-SUL","MTR-SHOPPING","MTR-FEIRA","MTR-GUARA",
+    "MTR-ARNIQ","MTR-AG-CLARAS","MTR-TAG-SUL","MTR-FURNAS","MTR-SAMBA-SUL","MTR-SAMAMBAIA",
+]
+
+def _mtr_time(a: str, b: str) -> int:
+    """Estima tempo (minutos) de viagem entre duas estações do metrô."""
+    for line in [_MTR_VERDE, _MTR_LARANJA]:
+        if a in line and b in line:
+            return abs(line.index(b) - line.index(a)) * 2 + 3
+    return 999  # estações incompatíveis
+
+
+@app.get("/api/v1/cidadao/routes/plan")
+def plan_route(from_lat: float, from_lon: float, to_lat: float, to_lon: float):
+    import math as _m
+
+    hub_stops = list(STOPS)  # hubs com dados de linha (STOP_LINES_MAP)
+    metro_stops_list = list(METRO_STATIONS)
+    all_stops_data = hub_stops + metro_stops_list
+
+    def hav(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        R = 6371000.0
+        p1, p2 = _m.radians(lat1), _m.radians(lat2)
+        dp = _m.radians(lat2 - lat1)
+        dl = _m.radians(lon2 - lon1)
+        a = _m.sin(dp/2)**2 + _m.cos(p1)*_m.cos(p2)*_m.sin(dl/2)**2
+        return R * 2 * _m.asin(_m.sqrt(a))
+
+    WALK  = 83.3   # m/min (~5 km/h)
+    BUS   = 380.0  # m/min (~23 km/h médio em trânsito urbano)
+    METRO = 550.0  # m/min (~33 km/h — metrô)
+    WAIT  = 8.0    # min de espera por baldeação
+
+    # Hubs mais próximos à origem/destino
+    o_hubs = sorted(hub_stops, key=lambda s: hav(from_lat, from_lon, s["stop_lat"], s["stop_lon"]))[:4]
+    d_hubs = sorted(hub_stops, key=lambda s: hav(to_lat,   to_lon,   s["stop_lat"], s["stop_lon"]))[:4]
+
+    # Estações de metrô mais próximas à origem/destino
+    o_metro = sorted(metro_stops_list, key=lambda s: hav(from_lat, from_lon, s["stop_lat"], s["stop_lon"]))[:3]
+    d_metro = sorted(metro_stops_list, key=lambda s: hav(to_lat,   to_lon,   s["stop_lat"], s["stop_lon"]))[:3]
+
+    # Parada mais próxima para exibição (bus ou metrô)
+    nearest_any = sorted(all_stops_data, key=lambda s: hav(from_lat, from_lon, s["stop_lat"], s["stop_lon"]))
+    nearest_any_d = sorted(all_stops_data, key=lambda s: hav(to_lat, to_lon,   s["stop_lat"], s["stop_lon"]))
+
+    mtr_map = {s["stop_id"]: s for s in metro_stops_list}
+
+    routes: list[dict] = []
+    seen: set = set()
+
+    def _bus_leg(os_: dict, ds_: dict, lid: str) -> dict:
+        ln = ALL_LINES.get(lid, {})
+        bt = hav(os_["stop_lat"], os_["stop_lon"], ds_["stop_lat"], ds_["stop_lon"]) / BUS
+        return {
+            "leg_type":     "bus",
+            "from_stop_id": os_["stop_id"], "from_stop_name": os_["stop_name"],
+            "from_lat": os_["stop_lat"],    "from_lon": os_["stop_lon"],
+            "to_stop_id":   ds_["stop_id"], "to_stop_name": ds_["stop_name"],
+            "to_lat": ds_["stop_lat"],      "to_lon": ds_["stop_lon"],
+            "line_id": lid, "line_name": ln.get("nome", lid),
+            "line_desc": ln.get("desc", ""), "line_tipo": ln.get("tipo", "local"),
+            "duration_min": round(bt),
+        }
+
+    def _metro_leg(from_s: dict, to_s: dict) -> dict:
+        t = _mtr_time(from_s["stop_id"], to_s["stop_id"])
+        verde = from_s["stop_id"] in _MTR_VERDE and to_s["stop_id"] in _MTR_VERDE
+        cor_nome = "Verde" if verde else "Laranja"
+        return {
+            "leg_type":     "metro",
+            "from_stop_id": from_s["stop_id"], "from_stop_name": from_s["stop_name"],
+            "from_lat": from_s["stop_lat"],    "from_lon": from_s["stop_lon"],
+            "to_stop_id":   to_s["stop_id"],   "to_stop_name": to_s["stop_name"],
+            "to_lat": to_s["stop_lat"],        "to_lon": to_s["stop_lon"],
+            "line_id": f"metro-{cor_nome.lower()}", "line_name": f"Metrô {cor_nome}",
+            "line_desc": f"Metrô DF — Linha {cor_nome}", "line_tipo": "metro",
+            "duration_min": t,
+        }
+
+    def _comfort() -> tuple:
+        pct = random.randint(15, 80)
+        label = "sentado" if pct < 40 else "provavelmente sentado" if pct < 65 else "em pé" if pct < 80 else "muito cheio"
+        return pct, label
+
+    def _make_route(rtype: str, legs: list, wf: float, wt: float) -> dict:
+        pct, comfort = _comfort()
+        transfers = len(legs) - 1
+        bus_legs = [l for l in legs if l["leg_type"] == "bus"]
+        mtr_legs = [l for l in legs if l["leg_type"] == "metro"]
+
+        if mtr_legs:
+            icon_parts = []
+            for l in legs:
+                icon_parts.append("🚇 " + l["line_name"] if l["leg_type"] == "metro" else l["line_name"])
+            label = " → ".join(icon_parts)
+        elif len(bus_legs) == 1:
+            label = bus_legs[0]["line_name"]
+        else:
+            label = " → ".join(l["line_name"] for l in bus_legs)
+
+        total = round(wf + sum(l["duration_min"] for l in legs) + WAIT * (len(legs) - 1) + wt)
+        return {
+            "type": rtype,
+            "label": label,
+            "legs": legs,
+            "total_duration_min": total,
+            "walk_min": round(wf + wt),
+            "transfers": transfers,
+            "num_vehicles": len(bus_legs) + len(mtr_legs),
+            "has_metro": bool(mtr_legs),
+            "comfort_pct": pct,
+            "comfort": comfort,
+        }
+
+    wf0 = hav(from_lat, from_lon, o_hubs[0]["stop_lat"], o_hubs[0]["stop_lon"]) / WALK if o_hubs else 0
+    wt0 = hav(to_lat,   to_lon,   d_hubs[0]["stop_lat"], d_hubs[0]["stop_lon"]) / WALK if d_hubs else 0
+
+    # ── 1. Rotas diretas (1 ônibus) ────────────────────────────────────────────
+    for os_ in o_hubs[:3]:
+        ol = set(STOP_LINES_MAP.get(os_["stop_id"], []))
+        wf = hav(from_lat, from_lon, os_["stop_lat"], os_["stop_lon"]) / WALK
+        for ds_ in d_hubs[:3]:
+            dl = set(STOP_LINES_MAP.get(ds_["stop_id"], []))
+            wt = hav(to_lat, to_lon, ds_["stop_lat"], ds_["stop_lon"]) / WALK
+            for lid in ol & dl:
+                key = f"d-{lid}-{os_['stop_id']}-{ds_['stop_id']}"
+                if key in seen: continue
+                seen.add(key)
+                routes.append(_make_route("direct", [_bus_leg(os_, ds_, lid)], wf, wt))
+
+    # ── 2. Rotas com 1 baldeação ônibus→ônibus via hub ─────────────────────────
+    HUB_IDS = ["RODO","CEI-N","TAG-N","SAM-N","GUA","SOB","PLAN","GAMA","SANTA-M","AG-CL",
+               "ASA-N-W3","ASA-S-W3","CRUZEIRO","SUDOESTE"]
+    for os_ in o_hubs[:3]:
+        ol = set(STOP_LINES_MAP.get(os_["stop_id"], []))
+        wf = hav(from_lat, from_lon, os_["stop_lat"], os_["stop_lon"]) / WALK
+        for hub_id in HUB_IDS:
+            hub = next((s for s in hub_stops if s["stop_id"] == hub_id), None)
+            if not hub: continue
+            hl = set(STOP_LINES_MAP.get(hub_id, []))
+            for l1 in list(ol & hl)[:2]:
+                for ds_ in d_hubs[:3]:
+                    dl = set(STOP_LINES_MAP.get(ds_["stop_id"], []))
+                    wt = hav(to_lat, to_lon, ds_["stop_lat"], ds_["stop_lon"]) / WALK
+                    for l2 in list(hl & dl)[:2]:
+                        if l1 == l2: continue
+                        key = f"t-{l1}-{hub_id}-{l2}"
+                        if key in seen: continue
+                        seen.add(key)
+                        routes.append(_make_route("transfer",
+                            [_bus_leg(os_, hub, l1), _bus_leg(hub, ds_, l2)], wf, wt))
+
+    # ── 3. Metrô direto (se origem e destino perto de estações) ────────────────
+    MTR_MAX_WALK = 1200  # m
+    for om in o_metro[:2]:
+        dist_o = hav(from_lat, from_lon, om["stop_lat"], om["stop_lon"])
+        if dist_o > MTR_MAX_WALK: continue
+        wf = dist_o / WALK
+        for dm in d_metro[:2]:
+            if om["stop_id"] == dm["stop_id"]: continue
+            t = _mtr_time(om["stop_id"], dm["stop_id"])
+            if t >= 999: continue
+            dist_d = hav(to_lat, to_lon, dm["stop_lat"], dm["stop_lon"])
+            if dist_d > MTR_MAX_WALK: continue
+            wt = dist_d / WALK
+            key = f"md-{om['stop_id']}-{dm['stop_id']}"
+            if key in seen: continue
+            seen.add(key)
+            routes.append(_make_route("metro_direct", [_metro_leg(om, dm)], wf, wt))
+
+    # ── 4. Ônibus → Metrô → Ônibus (3 pernas) ─────────────────────────────────
+    for os_ in o_hubs[:3]:
+        ol = set(STOP_LINES_MAP.get(os_["stop_id"], []))
+        wf = hav(from_lat, from_lon, os_["stop_lat"], os_["stop_lon"]) / WALK
+        for hub_a, mtr_a_id in _HUB_METRO.items():
+            mtr_a = mtr_map.get(mtr_a_id)
+            if not mtr_a: continue
+            hub_a_stop = next((s for s in hub_stops if s["stop_id"] == hub_a), None)
+            if not hub_a_stop: continue
+            la_set = set(STOP_LINES_MAP.get(hub_a, []))
+            l1_opts = list(ol & la_set)[:2]
+            if not l1_opts: continue
+
+            for hub_b, mtr_b_id in _HUB_METRO.items():
+                if hub_a == hub_b: continue
+                mtr_b = mtr_map.get(mtr_b_id)
+                if not mtr_b: continue
+                t_metro = _mtr_time(mtr_a_id, mtr_b_id)
+                if t_metro >= 999: continue
+                hub_b_stop = next((s for s in hub_stops if s["stop_id"] == hub_b), None)
+                if not hub_b_stop: continue
+                lb_set = set(STOP_LINES_MAP.get(hub_b, []))
+
+                for ds_ in d_hubs[:3]:
+                    dl = set(STOP_LINES_MAP.get(ds_["stop_id"], []))
+                    wt = hav(to_lat, to_lon, ds_["stop_lat"], ds_["stop_lon"]) / WALK
+                    l3_opts = list(lb_set & dl)[:2]
+                    if not l3_opts: continue
+
+                    for l1 in l1_opts:
+                        for l3 in l3_opts:
+                            if l1 == l3 and hub_a == hub_b: continue
+                            key = f"bmb-{l1}-{mtr_a_id}-{mtr_b_id}-{l3}"
+                            if key in seen: continue
+                            seen.add(key)
+                            routes.append(_make_route("bus_metro_bus", [
+                                _bus_leg(os_, hub_a_stop, l1),
+                                _metro_leg(mtr_a, mtr_b),
+                                _bus_leg(hub_b_stop, ds_, l3),
+                            ], wf, wt))
+
+    # ── 5. Metrô → Ônibus (se origem perto de metrô) ──────────────────────────
+    for om in o_metro[:2]:
+        dist_o = hav(from_lat, from_lon, om["stop_lat"], om["stop_lon"])
+        if dist_o > MTR_MAX_WALK: continue
+        wf = dist_o / WALK
+        for hub_b, mtr_b_id in _HUB_METRO.items():
+            mtr_b = mtr_map.get(mtr_b_id)
+            if not mtr_b: continue
+            t_metro = _mtr_time(om["stop_id"], mtr_b_id)
+            if t_metro >= 999: continue
+            hub_b_stop = next((s for s in hub_stops if s["stop_id"] == hub_b), None)
+            if not hub_b_stop: continue
+            lb_set = set(STOP_LINES_MAP.get(hub_b, []))
+            for ds_ in d_hubs[:3]:
+                dl = set(STOP_LINES_MAP.get(ds_["stop_id"], []))
+                wt = hav(to_lat, to_lon, ds_["stop_lat"], ds_["stop_lon"]) / WALK
+                for l3 in list(lb_set & dl)[:2]:
+                    key = f"mb-{om['stop_id']}-{mtr_b_id}-{l3}"
+                    if key in seen: continue
+                    seen.add(key)
+                    routes.append(_make_route("metro_bus", [
+                        _metro_leg(om, mtr_b),
+                        _bus_leg(hub_b_stop, ds_, l3),
+                    ], wf, wt))
+
+    # Ordena: menos baldeações primeiro, depois menor tempo
+    routes.sort(key=lambda r: (r["transfers"], r["total_duration_min"]))
+    # Remove duplicatas pelo par (primeiro hub, último hub) mantendo o mais rápido
+    best: dict[str, dict] = {}
+    for r in routes:
+        k = (r["legs"][0]["from_stop_id"], r["legs"][-1]["to_stop_id"])
+        if k not in best or r["total_duration_min"] < best[k]["total_duration_min"]:
+            best[k] = r
+    # Mantém variedade: até 2 rotas diretas + 2 com metrô + 2 com baldeação ônibus
+    final: list[dict] = []
+    buckets: dict[str, list] = {"direct": [], "metro": [], "transfer": []}
+    for r in sorted(routes, key=lambda x: x["total_duration_min"]):
+        if r["type"] == "direct":
+            if len(buckets["direct"]) < 2: buckets["direct"].append(r)
+        elif r.get("has_metro"):
+            if len(buckets["metro"]) < 2: buckets["metro"].append(r)
+        else:
+            if len(buckets["transfer"]) < 2: buckets["transfer"].append(r)
+    final = buckets["direct"] + buckets["metro"] + buckets["transfer"]
+    final.sort(key=lambda r: r["total_duration_min"])
+
+    return {
+        "from": {"lat": from_lat, "lon": from_lon, "nearest_stop": nearest_any[0] if nearest_any else None},
+        "to":   {"lat": to_lat,   "lon": to_lon,   "nearest_stop": nearest_any_d[0] if nearest_any_d else None},
+        "routes": final[:6],
+    }
+
+
+@app.get("/api/v1/cidadao/poi/search")
+def poi_search(q: str = "", tipo: str = ""):
+    """Busca local (instantânea) nos ~9.000 POIs pré-carregados do OpenStreetMap."""
+    q_clean = _normalize(q.strip())
+    if len(q_clean) < 2:
+        return []
+
+    # Resolve keywords → tipos OSM
+    target_types: set[str] = set()
+    for kw, types in _KW_TO_TYPES.items():
+        if q_clean == kw or q_clean in kw or kw in q_clean:
+            target_types.update(types)
+    if tipo:
+        target_types = {tipo}
+
+    results: list[dict] = []
+    for poi in _ALL_POIS:
+        matched = False
+        if target_types and poi["type"] in target_types:
+            matched = True
+        elif q_clean in poi["name_lower"]:
+            matched = True
+        if matched:
+            results.append({k: v for k, v in poi.items() if k != "name_lower"})
+
+    return results[:120]
+
+
+@app.get("/api/v1/cidadao/poi/categories")
+def poi_categories():
+    """Lista todas as categorias disponíveis com contagem de POIs."""
+    from collections import Counter
+    counts = Counter(p["type"] for p in _ALL_POIS)
+    return [{"type": t, "count": c} for t, c in counts.most_common()]
+
+
+@app.get("/api/v1/cidadao/poi/status")
+def poi_status():
+    return {"loaded": _pois_loaded, "total": len(_ALL_POIS)}
+
+
+# ── Haversine (módulo-nível) ─────────────────────────────────────────────────
+def _hav_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    R = 6371.0
+    p1, p2 = _math.radians(lat1), _math.radians(lat2)
+    a = _math.sin((p2-p1)/2)**2 + _math.cos(p1)*_math.cos(p2)*_math.sin((_math.radians(lon2-lon1))/2)**2
+    return R * 2 * _math.asin(_math.sqrt(a))
+
+
+# ── PARCEIROS MobiDF — estabelecimentos verificados com desconto ───────────────
+_PARCEIROS = [
+    # ─ Rodoviária do Plano Piloto ─
+    {"id":"p001","nome":"Café do Cerrado","tipo":"cafe",
+     "lat":-15.7932,"lon":-47.8828,
+     "descricao":"Café artesanal com grãos do cerrado mineiro",
+     "desconto":"15% OFF no café da manhã ou qualquer bebida quente",
+     "horario":"06:00–21:00","emoji":"☕","cor":"#92400e",
+     "ods":["ODS 8","ODS 11"],"distancia_parada_m":80,
+     "codigo_desconto":"MOBI15CAFE","verificado":True},
+    {"id":"p002","nome":"Padaria Ipê","tipo":"padaria",
+     "lat":-15.7945,"lon":-47.8835,
+     "descricao":"Padaria artesanal — pão de queijo e tapioca frescos",
+     "desconto":"10% OFF + café grátis em compras acima de R$15",
+     "horario":"05:30–20:00","emoji":"🥖","cor":"#b45309",
+     "ods":["ODS 8"],"distancia_parada_m":150,
+     "codigo_desconto":"MOBIIPE10","verificado":True},
+    # ─ Terminal Ceilândia Norte ─
+    {"id":"p003","nome":"Lanches da Conceição","tipo":"lanchonete",
+     "lat":-15.8097,"lon":-48.1075,
+     "descricao":"Lanchonete familiar há 20 anos servindo o trabalhador de Ceilândia",
+     "desconto":"1 caldo de cana GRÁTIS + 10% OFF no combo",
+     "horario":"06:00–22:00","emoji":"🍔","cor":"#fb923c",
+     "ods":["ODS 8","ODS 10"],"distancia_parada_m":60,
+     "codigo_desconto":"MOBICEI10","verificado":True},
+    {"id":"p004","nome":"Sucos & Saúde Ceilândia","tipo":"cafe",
+     "lat":-15.8110,"lon":-48.1088,
+     "descricao":"Sucos naturais, açaí e vitaminas frescos na hora",
+     "desconto":"2 por 1 no suco pequeno das 06h às 09h",
+     "horario":"05:30–19:00","emoji":"🥤","cor":"#16a34a",
+     "ods":["ODS 3","ODS 8"],"distancia_parada_m":120,
+     "codigo_desconto":"MOBISUCO2x1","verificado":True},
+    # ─ Terminal Taguatinga Norte ─
+    {"id":"p005","nome":"Espaço Taguá","tipo":"restaurante",
+     "lat":-15.8389,"lon":-48.0476,
+     "descricao":"Comida caseira com buffet por kilo e prato feito",
+     "desconto":"R$5 OFF no buffet acima de R$25",
+     "horario":"06:00–15:00","emoji":"🍽️","cor":"#f97316",
+     "ods":["ODS 2","ODS 8"],"distancia_parada_m":95,
+     "codigo_desconto":"MOBITAGU5","verificado":True},
+    {"id":"p006","nome":"Banca do Mazinho","tipo":"cafe",
+     "lat":-15.8401,"lon":-48.0488,
+     "descricao":"Banca de jornais e cafeteria — ponto de encontro de Taguatinga",
+     "desconto":"Café expresso R$2,50 + biscoito grátis",
+     "horario":"05:00–21:00","emoji":"☕","cor":"#92400e",
+     "ods":["ODS 8","ODS 11"],"distancia_parada_m":40,
+     "codigo_desconto":"MOBIBANCA","verificado":True},
+    # ─ Terminal Samambaia Norte ─
+    {"id":"p007","nome":"Bistrô Samambaia","tipo":"cafe",
+     "lat":-15.8765,"lon":-48.0820,
+     "descricao":"Café e lanches naturais próximo ao terminal",
+     "desconto":"15% OFF em qualquer lanche + café da manhã por R$9,90",
+     "horario":"06:00–20:00","emoji":"🥪","cor":"#84cc16",
+     "ods":["ODS 8","ODS 10"],"distancia_parada_m":110,
+     "codigo_desconto":"MOBISAMA15","verificado":True},
+    # ─ Asa Norte ─
+    {"id":"p008","nome":"Cantina da 508","tipo":"restaurante",
+     "lat":-15.7550,"lon":-47.8820,
+     "descricao":"Comida caseira para estudantes e trabalhadores da Asa Norte",
+     "desconto":"Sobremesa GRÁTIS no almoço com QR Code MobiDF",
+     "horario":"11:00–15:00","emoji":"🍲","cor":"#f97316",
+     "ods":["ODS 2","ODS 11"],"distancia_parada_m":200,
+     "codigo_desconto":"MOBI508","verificado":True},
+    {"id":"p009","nome":"Café UnB — ICC Sul","tipo":"cafe",
+     "lat":-15.7630,"lon":-47.8695,
+     "descricao":"Café da universidade, aberto à comunidade",
+     "desconto":"10% OFF em bebidas e pães",
+     "horario":"07:00–22:00","emoji":"☕","cor":"#7c3aed",
+     "ods":["ODS 4","ODS 8"],"distancia_parada_m":150,
+     "codigo_desconto":"MOBIUNB10","verificado":True},
+    # ─ Guará ─
+    {"id":"p010","nome":"Doceria Guará","tipo":"doces",
+     "lat":-15.8302,"lon":-47.9838,
+     "descricao":"Doceria artesanal com brigadeiros gourmet e bolos caseiros",
+     "desconto":"Leve 6 brigadeiros, pague 5",
+     "horario":"08:00–19:00","emoji":"🍬","cor":"#e879f9",
+     "ods":["ODS 8"],"distancia_parada_m":180,
+     "codigo_desconto":"MOBIBRG6x5","verificado":True},
+    # ─ Santa Maria ─
+    {"id":"p011","nome":"Açaí do Trabalhador","tipo":"lanchonete",
+     "lat":-16.0205,"lon":-48.0660,
+     "descricao":"Açaí e sucos gelados — o ponto dos trabalhadores de Santa Maria",
+     "desconto":"Açaí 300ml por R$10,90 (exclusivo MobiDF)",
+     "horario":"06:30–22:00","emoji":"🫐","cor":"#7c3aed",
+     "ods":["ODS 8","ODS 10"],"distancia_parada_m":90,
+     "codigo_desconto":"MOBIACAI","verificado":True},
+    # ─ Sobradinho ─
+    {"id":"p012","nome":"Café Regional Sobradinho","tipo":"cafe",
+     "lat":-15.6530,"lon":-47.7980,
+     "descricao":"Café especial da região com pão de queijo artesanal",
+     "desconto":"Combo café + pão de queijo R$8 (economize R$4)",
+     "horario":"05:30–19:30","emoji":"☕","cor":"#b45309",
+     "ods":["ODS 8","ODS 11"],"distancia_parada_m":70,
+     "codigo_desconto":"MOBISOB8","verificado":True},
+    # ─ Culturais / Eventos ─
+    {"id":"p013","nome":"Feira dos Importados","tipo":"feira",
+     "lat":-15.7820,"lon":-47.9100,
+     "descricao":"Maior feira de importados do DF — mais de 2.000 lojas",
+     "desconto":"R$20 OFF em compras acima de R$150",
+     "horario":"Sex 12:00–22:00 / Sáb-Dom 08:00–22:00",
+     "emoji":"🛍️","cor":"#a855f7",
+     "ods":["ODS 8","ODS 10"],"distancia_parada_m":250,
+     "codigo_desconto":"MOBIFEIRA20","verificado":True},
+    {"id":"p014","nome":"Espaço Cultural Ceilândia","tipo":"cultura",
+     "lat":-15.8150,"lon":-48.1010,
+     "descricao":"Shows, exposições e eventos culturais da periferia do DF",
+     "desconto":"ENTRADA GRATUITA em shows mensais",
+     "horario":"Conforme programação",
+     "emoji":"🎭","cor":"#ec4899",
+     "ods":["ODS 11","ODS 10","ODS 4"],"distancia_parada_m":300,
+     "codigo_desconto":"MOBICULTURA","verificado":True},
+    {"id":"p015","nome":"Mercado do Produtor — CEASA","tipo":"feira",
+     "lat":-15.8080,"lon":-47.9795,
+     "descricao":"Feira do produtor com frutas, verduras e produtos regionais",
+     "desconto":"10% OFF em compras acima de R$30 — apoio à agricultura familiar",
+     "horario":"Sáb 05:00–12:00","emoji":"🥦","cor":"#16a34a",
+     "ods":["ODS 2","ODS 8","ODS 12"],"distancia_parada_m":200,
+     "codigo_desconto":"MOBICEASA10","verificado":True},
+]
+
+
+@app.get("/api/v1/cidadao/parceiros/nearby")
+def parceiros_nearby(lat: float, lon: float, radius_m: int = 800):
+    result = []
+    for p in _PARCEIROS:
+        d = _hav_km(lat, lon, p["lat"], p["lon"]) * 1000
+        if d <= radius_m:
+            result.append({**p, "dist_m": int(d)})
+    result.sort(key=lambda x: x["dist_m"])
+    return result
+
+
+@app.get("/api/v1/cidadao/parceiros")
+def parceiros_all():
+    return _PARCEIROS
+
+
+@app.post("/api/v1/cidadao/parceiros/{parceiro_id}/qrcode")
+def gerar_qrcode(parceiro_id: str, user_token: str = ""):
+    parceiro = next((p for p in _PARCEIROS if p["id"] == parceiro_id), None)
+    if not parceiro:
+        from fastapi import HTTPException
+        raise HTTPException(404, "Parceiro não encontrado")
+    now = int(time.time())
+    expires = now + 900  # 15 min
+    payload = f"MOBIDF:{parceiro_id}:{user_token or 'guest'}:{now}"
+    code = hashlib.sha256(payload.encode()).hexdigest()[:12].upper()
+    qr_data = f"MOBIDF|{parceiro_id}|{code}|{expires}|{parceiro['codigo_desconto']}"
+    return {
+        "qr_data": qr_data,
+        "code": code,
+        "desconto": parceiro["desconto"],
+        "parceiro_nome": parceiro["nome"],
+        "codigo_desconto": parceiro["codigo_desconto"],
+        "valido_ate": datetime.fromtimestamp(expires).strftime("%H:%M"),
+        "expires_ts": expires,
+    }
+
+
+# ── ANALYTICS — presença e eventos em tempo real ──────────────────────────────
+# session_id → last_heartbeat timestamp
+_SESSIONS: dict[str, dict] = {}
+# ring buffer de eventos (máx. 1000)
+_EVENTS: list[dict] = []
+_ACTIVE_TTL = 120  # segundos sem heartbeat para considerar offline
+
+
+def _prune_sessions() -> None:
+    now = time.time()
+    dead = [sid for sid, s in _SESSIONS.items() if now - s["ts"] > _ACTIVE_TTL * 5]
+    for sid in dead:
+        del _SESSIONS[sid]
+
+
+@app.post("/api/v1/analytics/heartbeat")
+def heartbeat(session_id: str, page: str = "", user_name: str = ""):
+    _SESSIONS[session_id] = {
+        "ts": time.time(),
+        "page": page,
+        "user": user_name or "anônimo",
+    }
+    _prune_sessions()
+    return {"online": sum(1 for s in _SESSIONS.values() if time.time() - s["ts"] < _ACTIVE_TTL)}
+
+
+@app.post("/api/v1/analytics/event")
+def track_event(session_id: str, event: str, meta: str = ""):
+    _EVENTS.append({
+        "session_id": session_id,
+        "event": event,
+        "meta": meta,
+        "ts": time.time(),
+    })
+    if len(_EVENTS) > 1000:
+        _EVENTS.pop(0)
+    return {"ok": True}
+
+
+@app.get("/api/v1/analytics/live")
+def live_stats():
+    now = time.time()
+    active_sessions = {sid: s for sid, s in _SESSIONS.items() if now - s["ts"] < _ACTIVE_TTL}
+    events_1h = [e for e in _EVENTS if now - e["ts"] < 3600]
+    events_24h = [e for e in _EVENTS if now - e["ts"] < 86400]
+
+    def count(evs, name): return len([e for e in evs if e["event"] == name])
+
+    # Distribui sessões por página
+    pages: dict[str, int] = {}
+    for s in active_sessions.values():
+        p = s.get("page", "")
+        pages[p] = pages.get(p, 0) + 1
+
+    return {
+        "online_now":         len(active_sessions),
+        "sessions_total":     len(_SESSIONS),
+        "events_1h":          len(events_1h),
+        "events_24h":         len(events_24h),
+        "routes_1h":          count(events_1h, "route_planned"),
+        "poi_searches_1h":    count(events_1h, "poi_search"),
+        "qr_generated_1h":    count(events_1h, "qr_generated"),
+        "stops_searched_1h":  count(events_1h, "stop_search"),
+        "logins_1h":          count(events_1h, "login"),
+        "pages_active":       pages,
+        "uptime_s":           int(now),
+    }
+
+
+@app.get("/")
+def health():
+    return {"status": "ok", "service": "MobiDF AI", "mode": "mock",
+            "online": sum(1 for s in _SESSIONS.values() if time.time() - s["ts"] < _ACTIVE_TTL)}
 
 @app.get("/api/v1/cidadao/demo/maria")
 def demo_maria():
