@@ -1,9 +1,15 @@
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 from typing import Optional
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=False,
+        extra="ignore"
+    )
+
     # Database
     database_url: str = "postgresql+asyncpg://mobidf:mobidf_secret@localhost:5432/mobidf"
     database_url_sync: str = "postgresql://mobidf:mobidf_secret@localhost:5432/mobidf"
@@ -22,10 +28,6 @@ class Settings(BaseSettings):
 
     # Google Maps
     google_maps_api_key: str = ""
-
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
 
     @property
     def cors_origins_list(self) -> list[str]:
