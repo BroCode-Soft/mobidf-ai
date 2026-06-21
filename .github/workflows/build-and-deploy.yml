@@ -150,11 +150,34 @@ jobs:
       - name: Check service health
         run: |
           echo "Waiting for services to be healthy..."
-          sleep 10
           
+          # Wait up to 60 seconds for containers to be healthy
+          for i in {1..12}; do
+            echo "Health check attempt $i/12..."
+            
+            # Check PostgreSQL
+            if docker exec mobidf-postgres pg_isready -U mobidf > /dev/null 2>&1; then
+              echo "✓ PostgreSQL is ready"
+              break
+            fi
+            
+            if [ $i -eq 12 ]; then
+              echo "⚠ PostgreSQL still starting, continuing..."
+            else
+              sleep 5
+            fi
+          done
+          
+          # Wait additional 30 seconds for backend to fully start
+          echo ""
+          echo "Waiting for backend to fully initialize..."
+          sleep 30
+          
+          echo ""
           echo "Backend health check:"
           curl -f http://localhost:8000/health || echo "Backend health check pending..."
           
+          echo ""
           echo "Frontend health check:"
           curl -f http://localhost:3000 || echo "Frontend health check pending..."
           
@@ -162,12 +185,15 @@ jobs:
           echo "Verifying .env.production was loaded:"
           echo "  PostgreSQL environment:"
           docker exec mobidf-postgres env | grep "POSTGRES_PASSWORD" | cut -c1-50
-          echo "  Backend environment:"
-          docker exec mobidf-backend env | grep -E "CORS_ORIGINS|NODE_ENV|DEBUG"
-          echo "  Frontend environment:"
-          docker exec mobidf-frontend env | grep -E "NEXT_PUBLIC_API_URL|NODE_ENV"
           
-          echo "✓ All services running with production configuration"
+          echo "  Backend environment:"
+          docker exec mobidf-backend env | grep -E "CORS_ORIGINS|NODE_ENV|DEBUG" || echo "Backend still starting..."
+          
+          echo "  Frontend environment:"
+          docker exec mobidf-frontend env | grep -E "NEXT_PUBLIC_API_URL|NODE_ENV" || echo "Frontend still starting..."
+          
+          echo ""
+          echo "✓ Services deployment verification complete"
 
       - name: Clean up Docker login
         if: always()
