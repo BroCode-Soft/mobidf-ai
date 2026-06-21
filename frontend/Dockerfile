@@ -3,7 +3,7 @@ ARG NODE_VERSION=20-alpine
 FROM node:${NODE_VERSION} AS deps
 WORKDIR /app
 COPY package.json package-lock.json* ./
-RUN npm ci --omit=dev
+RUN npm ci
 
 FROM node:${NODE_VERSION} AS builder
 ARG BUILD_DATE
