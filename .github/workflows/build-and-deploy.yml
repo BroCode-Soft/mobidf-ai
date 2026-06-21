@@ -79,6 +79,7 @@ jobs:
             BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
             VCS_REF=${{ github.sha }}
             VERSION=${{ steps.meta-frontend.outputs.version }}
+            NEXT_PUBLIC_API_URL=https://mobidf.brocode.net.br/api
 
   deploy-to-self-hosted:
     needs: build-and-push

@@ -9,11 +9,14 @@ FROM node:${NODE_VERSION} AS builder
 ARG BUILD_DATE
 ARG VCS_REF
 ARG VERSION=latest
+ARG NEXT_PUBLIC_API_URL=http://localhost:8000
 
 LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.title="MobiDF Frontend"
+
+ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
 
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules

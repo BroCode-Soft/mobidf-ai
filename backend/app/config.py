@@ -1,4 +1,5 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, field_validator
 from functools import lru_cache
 from typing import Optional
 
@@ -16,7 +17,10 @@ class Settings(BaseSettings):
 
     # App
     secret_key: str = "change_me"
-    cors_origins: str = "http://localhost:3000,https://mobidf.brocode.net.br"
+    cors_origins: str = Field(
+        default="http://localhost:3000,https://mobidf.brocode.net.br",
+        description="Comma-separated list of allowed CORS origins"
+    )
     debug: bool = False
 
     # GTFS
@@ -28,6 +32,16 @@ class Settings(BaseSettings):
 
     # Google Maps
     google_maps_api_key: str = ""
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def validate_cors_origins(cls, v):
+        """Ensure cors_origins is always treated as a string, never JSON"""
+        if isinstance(v, str):
+            return v.strip()
+        if v is None or v == "":
+            return "http://localhost:3000"
+        return str(v).strip()
 
     @property
     def cors_origins_list(self) -> list[str]:
