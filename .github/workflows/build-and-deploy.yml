@@ -88,9 +88,9 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Configure production environment
+      - name: Configure production environment (.env.production)
         run: |
-          cat > .env << 'ENVEOF'
+          cat > .env.production << 'ENVEOF'
           # ============================================================================
           # PostgreSQL Configuration - Production
           # ============================================================================
@@ -122,10 +122,12 @@ jobs:
           NEXT_PUBLIC_MAP_TILE_URL=https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png
           ENVEOF
           
-          echo "✓ .env configured for production"
-          echo "✓ CORS_ORIGINS: $(grep CORS_ORIGINS .env)"
-          echo "✓ NEXT_PUBLIC_API_URL: $(grep NEXT_PUBLIC_API_URL .env)"
-          echo "✓ NODE_ENV: $(grep NODE_ENV .env)"
+          echo "✓ .env.production configured from GitHub Secrets"
+          echo "✓ POSTGRES_PASSWORD: $(grep POSTGRES_PASSWORD .env.production | cut -c1-20)..."
+          echo "✓ SECRET_KEY: $(grep SECRET_KEY .env.production | cut -c1-20)..."
+          echo "✓ CORS_ORIGINS: $(grep CORS_ORIGINS .env.production)"
+          echo "✓ NEXT_PUBLIC_API_URL: $(grep NEXT_PUBLIC_API_URL .env.production)"
+          echo "✓ NODE_ENV: $(grep NODE_ENV .env.production)"
 
       - name: Log in to Container Registry on self-hosted
         run: |
@@ -133,18 +135,17 @@ jobs:
 
       - name: Pull latest images
         run: |
-          docker compose pull
-        env:
-          COMPOSE_FILE: docker-compose.yml
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
+          
+          echo "✓ Latest images pulled from registry"
 
       - name: Restart services with production overrides
         run: |
           docker compose -f docker-compose.yml -f docker-compose.prod.yml down
           docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
           
-          echo "✓ Services started with production configuration"
-        env:
-          COMPOSE_FILE: docker-compose.yml
+          echo "✓ Services restarted with production configuration"
+          echo "✓ Loading .env.production automatically"
 
       - name: Check service health
         run: |
@@ -158,13 +159,15 @@ jobs:
           curl -f http://localhost:3000 || echo "Frontend health check pending..."
           
           echo ""
-          echo "Verifying environment configuration:"
-          echo "Backend environment:"
-          docker exec mobidf-backend env | grep -E "CORS_ORIGINS|NODE_ENV|DEBUG" || echo "Could not verify backend env"
+          echo "Verifying .env.production was loaded:"
+          echo "  PostgreSQL environment:"
+          docker exec mobidf-postgres env | grep "POSTGRES_PASSWORD" | cut -c1-50
+          echo "  Backend environment:"
+          docker exec mobidf-backend env | grep -E "CORS_ORIGINS|NODE_ENV|DEBUG"
+          echo "  Frontend environment:"
+          docker exec mobidf-frontend env | grep -E "NEXT_PUBLIC_API_URL|NODE_ENV"
           
-          echo ""
-          echo "Frontend environment:"
-          docker exec mobidf-frontend env | grep -E "NEXT_PUBLIC_API_URL|NODE_ENV" || echo "Could not verify frontend env"
+          echo "✓ All services running with production configuration"
 
       - name: Clean up Docker login
         if: always()

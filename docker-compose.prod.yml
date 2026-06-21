@@ -9,8 +9,11 @@
 
 version: '3.8'
 
+# Carrega automaticamente o arquivo .env.production para produção
 services:
   postgres:
+    env_file:
+      - .env.production
     # PostgreSQL only accessible internally, not exposed to host ports
     ports: []
     # Add resource limits for production
@@ -26,6 +29,8 @@ services:
   backend:
     # Backend API only accessible via nginx reverse proxy
     ports: []
+    env_file:
+      - .env.production
     environment:
       CORS_ORIGINS: https://mobidf.brocode.net.br
       DEBUG: 'false'
@@ -41,6 +46,8 @@ services:
   frontend:
     # Frontend only accessible via nginx reverse proxy
     ports: []
+    env_file:
+      - .env.production
     environment:
       NEXT_PUBLIC_API_URL: https://mobidf.brocode.net.br/api
       NODE_ENV: production
