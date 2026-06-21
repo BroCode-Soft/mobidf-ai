@@ -827,6 +827,10 @@ def suggest_reallocation(event_id: str):
     ]
     return {"event": event, "suggestions": suggestions, "total_nearby": len(already_close)}
 
+@app.get("/")
+def health():
+    return {"status": "ok", "service": "MobiDF AI", "mode": "mock"}
+
 @app.get("/api/v1/cidadao/demo/maria")
 def demo_maria():
     return {
