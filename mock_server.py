@@ -827,6 +827,134 @@ def suggest_reallocation(event_id: str):
     ]
     return {"event": event, "suggestions": suggestions, "total_nearby": len(already_close)}
 
+@app.get("/api/v1/cidadao/routes/plan")
+def plan_route(from_lat: float, from_lon: float, to_lat: float, to_lon: float):
+    import math as _m
+
+    all_stops_data = list(STOPS) + [
+        {"stop_id": s["stop_id"], "stop_name": s["stop_name"],
+         "stop_lat": s["stop_lat"], "stop_lon": s["stop_lon"]}
+        for s in METRO_STATIONS
+    ]
+
+    def hav(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        R = 6371000.0
+        p1, p2 = _m.radians(lat1), _m.radians(lat2)
+        dp = _m.radians(lat2 - lat1)
+        dl = _m.radians(lon2 - lon1)
+        a = _m.sin(dp/2)**2 + _m.cos(p1)*_m.cos(p2)*_m.sin(dl/2)**2
+        return R * 2 * _m.asin(_m.sqrt(a))
+
+    WALK  = 83.3   # m/min  (~5 km/h)
+    BUS   = 400.0  # m/min  (~24 km/h)
+    WAIT  = 10.0   # min transfer wait
+
+    o_stops = sorted(all_stops_data, key=lambda s: hav(from_lat, from_lon, s["stop_lat"], s["stop_lon"]))[:5]
+    d_stops = sorted(all_stops_data, key=lambda s: hav(to_lat, to_lon, s["stop_lat"], s["stop_lon"]))[:5]
+
+    routes = []
+    seen: set = set()
+
+    # ── Rotas diretas ───────────────────────────────────────────────────────────
+    for os_ in o_stops[:3]:
+        ol = set(STOP_LINES_MAP.get(os_["stop_id"], []))
+        for ds_ in d_stops[:3]:
+            dl = set(STOP_LINES_MAP.get(ds_["stop_id"], []))
+            for lid in ol & dl:
+                key = f"d-{lid}-{os_['stop_id']}-{ds_['stop_id']}"
+                if key in seen: continue
+                seen.add(key)
+                line = ALL_LINES.get(lid, {})
+                wf   = hav(from_lat, from_lon, os_["stop_lat"], os_["stop_lon"]) / WALK
+                wt   = hav(to_lat,   to_lon,   ds_["stop_lat"], ds_["stop_lon"]) / WALK
+                bt   = hav(os_["stop_lat"], os_["stop_lon"], ds_["stop_lat"], ds_["stop_lon"]) / BUS
+                pct  = random.randint(15, 85)
+                routes.append({
+                    "type": "direct",
+                    "label": line.get("nome", lid),
+                    "legs": [{
+                        "from_stop_id":   os_["stop_id"],  "from_stop_name": os_["stop_name"],
+                        "from_lat":       os_["stop_lat"], "from_lon":       os_["stop_lon"],
+                        "to_stop_id":     ds_["stop_id"],  "to_stop_name":   ds_["stop_name"],
+                        "to_lat":         ds_["stop_lat"], "to_lon":         ds_["stop_lon"],
+                        "line_id":        lid,             "line_name":      line.get("nome", lid),
+                        "line_desc":      line.get("desc", ""),
+                        "line_tipo":      line.get("tipo", "local"),
+                        "duration_min":   round(bt),
+                    }],
+                    "total_duration_min": round(wf + bt + wt),
+                    "walk_min":  round(wf + wt),
+                    "transfers": 0,
+                    "comfort_pct": pct,
+                    "comfort": "sentado" if pct<40 else "provavelmente sentado" if pct<65 else "em pé" if pct<80 else "muito cheio",
+                })
+
+    # ── Rotas com 1 baldeação via hubs ─────────────────────────────────────────
+    HUB_IDS = ["RODO","CEI-N","TAG-N","SAM-N","GUA","SOB","PLAN","GAMA","SANTA-M","AG-CL"]
+    for os_ in o_stops[:2]:
+        ol = set(STOP_LINES_MAP.get(os_["stop_id"], []))
+        for hub_id in HUB_IDS:
+            hub = next((s for s in all_stops_data if s["stop_id"] == hub_id), None)
+            if not hub: continue
+            hl = set(STOP_LINES_MAP.get(hub_id, []))
+            leg1_lines = ol & hl
+            if not leg1_lines: continue
+            for ds_ in d_stops[:2]:
+                dl = set(STOP_LINES_MAP.get(ds_["stop_id"], []))
+                leg2_lines = hl & dl
+                if not leg2_lines: continue
+                for l1 in list(leg1_lines)[:2]:
+                    for l2 in list(leg2_lines)[:2]:
+                        if l1 == l2: continue
+                        key = f"t-{l1}-{hub_id}-{l2}"
+                        if key in seen: continue
+                        seen.add(key)
+                        ln1 = ALL_LINES.get(l1, {}); ln2 = ALL_LINES.get(l2, {})
+                        wf  = hav(from_lat, from_lon, os_["stop_lat"], os_["stop_lon"]) / WALK
+                        wt  = hav(to_lat,   to_lon,   ds_["stop_lat"], ds_["stop_lon"]) / WALK
+                        b1  = hav(os_["stop_lat"], os_["stop_lon"], hub["stop_lat"], hub["stop_lon"]) / BUS
+                        b2  = hav(hub["stop_lat"], hub["stop_lon"], ds_["stop_lat"], ds_["stop_lon"]) / BUS
+                        pct = random.randint(15, 85)
+                        routes.append({
+                            "type": "transfer",
+                            "label": f"{ln1.get('nome',l1)} → {ln2.get('nome',l2)}",
+                            "legs": [
+                                {
+                                    "from_stop_id": os_["stop_id"], "from_stop_name": os_["stop_name"],
+                                    "from_lat": os_["stop_lat"],    "from_lon": os_["stop_lon"],
+                                    "to_stop_id": hub_id,           "to_stop_name": hub["stop_name"],
+                                    "to_lat": hub["stop_lat"],      "to_lon": hub["stop_lon"],
+                                    "line_id": l1, "line_name": ln1.get("nome",l1),
+                                    "line_desc": ln1.get("desc",""), "line_tipo": ln1.get("tipo","local"),
+                                    "duration_min": round(b1),
+                                },
+                                {
+                                    "from_stop_id": hub_id,         "from_stop_name": hub["stop_name"],
+                                    "from_lat": hub["stop_lat"],    "from_lon": hub["stop_lon"],
+                                    "to_stop_id": ds_["stop_id"],   "to_stop_name": ds_["stop_name"],
+                                    "to_lat": ds_["stop_lat"],      "to_lon": ds_["stop_lon"],
+                                    "line_id": l2, "line_name": ln2.get("nome",l2),
+                                    "line_desc": ln2.get("desc",""), "line_tipo": ln2.get("tipo","local"),
+                                    "duration_min": round(b2),
+                                },
+                            ],
+                            "total_duration_min": round(wf + b1 + WAIT + b2 + wt),
+                            "walk_min": round(wf + wt),
+                            "transfers": 1,
+                            "transfer_stop": hub["stop_name"],
+                            "comfort_pct": pct,
+                            "comfort": "sentado" if pct<40 else "provavelmente sentado" if pct<65 else "em pé" if pct<80 else "muito cheio",
+                        })
+
+    routes.sort(key=lambda r: (r["transfers"], r["total_duration_min"]))
+
+    return {
+        "from": {"lat": from_lat, "lon": from_lon, "nearest_stop": o_stops[0] if o_stops else None},
+        "to":   {"lat": to_lat,   "lon": to_lon,   "nearest_stop": d_stops[0] if d_stops else None},
+        "routes": routes[:5],
+    }
+
+
 @app.get("/")
 def health():
     return {"status": "ok", "service": "MobiDF AI", "mode": "mock"}

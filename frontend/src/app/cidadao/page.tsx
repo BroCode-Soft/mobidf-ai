@@ -2,8 +2,18 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
 import { motion, AnimatePresence } from "framer-motion";
-import { api, type Stop, type NextTrip, type CartaoSaldo, type MetroLineSegment } from "@/lib/api";
+import { api, type Stop, type NextTrip, type CartaoSaldo, type MetroLineSegment, type Route, type RoutePlan } from "@/lib/api";
 import Logo from "@/components/ui/Logo";
+
+const RouteMap = dynamic(() => import("@/components/cidadao/RouteMap"), {
+  ssr: false,
+  loading: () => (
+    <div style={{ width:"100%", height:"100%", display:"flex", alignItems:"center",
+      justifyContent:"center", background:"rgba(255,255,255,0.04)", borderRadius:18 }}>
+      <div style={{ color:"rgba(255,255,255,0.35)", fontSize:12 }}>Carregando mapa…</div>
+    </div>
+  ),
+});
 
 /* Leaflet precisa de window — importado apenas no client */
 const StopsMap = dynamic(() => import("@/components/cidadao/StopsMap"), {
@@ -24,7 +34,7 @@ const METRO_COLORS: Record<string, string> = {
 };
 
 const ease: [number,number,number,number] = [0.16, 1, 0.3, 1];
-type Tab = "linhas" | "cartao" | "maria";
+type Tab = "linhas" | "cartao" | "maria" | "rotas";
 
 /* ── Cores por ocupação ── */
 const OCC_GRAD: Record<string, string> = {
@@ -214,6 +224,58 @@ export default function CidadaoPage() {
   const [cartaoLoading, setCartaoLoading] = useState(false);
   const [cartaoError, setCartaoError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  /* ── Rota ── */
+  type Pt = { lat: number; lon: number; label: string };
+  const [fromPt,      setFromPt]      = useState<Pt | null>(null);
+  const [toPt,        setToPt]        = useState<Pt | null>(null);
+  const [pickMode,    setPickMode]    = useState<"origin"|"destination"|null>(null);
+  const [fromQuery,   setFromQuery]   = useState("");
+  const [toQuery,     setToQuery]     = useState("");
+  const [fromSugg,    setFromSugg]    = useState<Stop[]>([]);
+  const [toSugg,      setToSugg]      = useState<Stop[]>([]);
+  const [routePlan,   setRoutePlan]   = useState<RoutePlan | null>(null);
+  const [routeLoading,setRouteLoading]= useState(false);
+  const [selectedRoute, setSelectedRoute] = useState<Route | null>(null);
+
+  const planRoute = useCallback(async (from: Pt, to: Pt) => {
+    setRouteLoading(true); setRoutePlan(null); setSelectedRoute(null);
+    try {
+      const plan = await api.cidadao.planRoute(from.lat, from.lon, to.lat, to.lon);
+      setRoutePlan(plan);
+      if (plan.routes.length > 0) setSelectedRoute(plan.routes[0]);
+    } catch { /* silencioso */ }
+    finally { setRouteLoading(false); }
+  }, []);
+
+  const handleMapClick = useCallback((lat: number, lon: number) => {
+    if (!pickMode) return;
+    const label = `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
+    if (pickMode === "origin") {
+      const pt = { lat, lon, label };
+      setFromPt(pt); setFromQuery(label); setFromSugg([]);
+      setPickMode(null);
+      if (toPt) planRoute(pt, toPt);
+    } else {
+      const pt = { lat, lon, label };
+      setToPt(pt); setToQuery(label); setToSugg([]);
+      setPickMode(null);
+      if (fromPt) planRoute(fromPt, pt);
+    }
+  }, [pickMode, fromPt, toPt, planRoute]);
+
+  useEffect(() => {
+    if (!fromQuery.trim() || fromQuery.includes(",")) { setFromSugg([]); return; }
+    const t = setTimeout(() => api.cidadao.searchStops(fromQuery).then(setFromSugg).catch(()=>{}), 350);
+    return () => clearTimeout(t);
+  }, [fromQuery]);
+
+  useEffect(() => {
+    if (!toQuery.trim() || toQuery.includes(",")) { setToSugg([]); return; }
+    const t = setTimeout(() => api.cidadao.searchStops(toQuery).then(setToSugg).catch(()=>{}), 350);
+    return () => clearTimeout(t);
+  }, [toQuery]);
+
   // O mapa é sempre visível na aba Linhas (carrega todas as paradas no mount)
   const showMap = tab === "linhas";
 
@@ -292,6 +354,7 @@ export default function CidadaoPage() {
 
   const TABS: Array<{ id: Tab; icon: string; label: string }> = [
     { id:"linhas",   icon:"🚌", label:"Linhas"   },
+    { id:"rotas",    icon:"🗺️",  label:"Rotas"    },
     { id:"cartao",   icon:"💳", label:"Cartão"   },
     { id:"maria",    icon:"🌟", label:"Maria"    },
   ];
@@ -356,6 +419,38 @@ export default function CidadaoPage() {
           </div>
         )}
       </motion.header>
+
+      {/* ── Mapa de Rotas — sempre visível na aba Rotas ── */}
+      {tab === "rotas" && (
+        <div style={{ margin:"10px 18px 0", borderRadius:20, overflow:"hidden",
+          border:"1px solid rgba(255,255,255,0.12)", position:"relative", zIndex:5, height:340 }}>
+          <RouteMap
+            origin={fromPt}
+            destination={toPt}
+            legs={selectedRoute?.legs ?? []}
+            pickMode={pickMode}
+            onMapClick={handleMapClick}
+          />
+          {/* Botões de modo de clique */}
+          <div style={{ position:"absolute", bottom:10, left:"50%", transform:"translateX(-50%)",
+            zIndex:1000, display:"flex", gap:6 }}>
+            <button onClick={() => setPickMode(p => p==="origin" ? null : "origin")}
+              style={{ padding:"7px 14px", borderRadius:99, border:"none", cursor:"pointer",
+                fontSize:11, fontWeight:700,
+                background: pickMode==="origin" ? "#10b981" : "rgba(16,185,129,0.25)",
+                color:"#fff", boxShadow:"0 2px 8px rgba(0,0,0,0.3)" }}>
+              📍 Definir Origem
+            </button>
+            <button onClick={() => setPickMode(p => p==="destination" ? null : "destination")}
+              style={{ padding:"7px 14px", borderRadius:99, border:"none", cursor:"pointer",
+                fontSize:11, fontWeight:700,
+                background: pickMode==="destination" ? "#f43f5e" : "rgba(244,63,94,0.25)",
+                color:"#fff", boxShadow:"0 2px 8px rgba(0,0,0,0.3)" }}>
+              🏁 Definir Destino
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ── Mapa — aparece quando há paradas ou localização GPS ── */}
       <AnimatePresence>
@@ -524,6 +619,204 @@ export default function CidadaoPage() {
                         Nenhum horário disponível para esta parada.
                       </div>
                     )}
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* ══ ROTAS ══ */}
+            {tab === "rotas" && (
+              <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+
+                {/* ── Inputs De / Para ── */}
+                {(["from","to"] as const).map((side) => {
+                  const isFrom   = side === "from";
+                  const query    = isFrom ? fromQuery  : toQuery;
+                  const setQuery = isFrom ? setFromQuery : setToQuery;
+                  const sugg     = isFrom ? fromSugg   : toSugg;
+                  const pt       = isFrom ? fromPt     : toPt;
+                  const color    = isFrom ? "#10b981"  : "#f43f5e";
+                  const label    = isFrom ? "De (Origem)" : "Para (Destino)";
+                  const pickId   = isFrom ? "origin" as const : "destination" as const;
+                  return (
+                    <div key={side} style={{ position:"relative" }}>
+                      <div style={{ display:"flex", gap:6 }}>
+                        <div style={{ flex:1, position:"relative" }}>
+                          <span style={{ position:"absolute", left:12, top:"50%", transform:"translateY(-50%)",
+                            fontSize:14, pointerEvents:"none" }}>{isFrom ? "🟢" : "🔴"}</span>
+                          <input
+                            style={{ width:"100%", padding:"12px 12px 12px 36px", borderRadius:14,
+                              border: pt ? `1.5px solid ${color}55` : "1.5px solid rgba(255,255,255,0.12)",
+                              background:"rgba(255,255,255,0.1)", color:"#fff", fontSize:13,
+                              outline:"none", boxSizing:"border-box" }}
+                            placeholder={label}
+                            value={query}
+                            onChange={e => { setQuery(e.target.value); if (isFrom) setFromPt(null); else setToPt(null); }}
+                          />
+                        </div>
+                        {isFrom && (
+                          <button onClick={() => {
+                            if (!navigator.geolocation) return;
+                            navigator.geolocation.getCurrentPosition(pos => {
+                              const pt2 = { lat: pos.coords.latitude, lon: pos.coords.longitude, label:"Minha localização" };
+                              setFromPt(pt2); setFromQuery("Minha localização"); setFromSugg([]);
+                              if (toPt) planRoute(pt2, toPt);
+                            });
+                          }}
+                          style={{ width:44, height:44, borderRadius:12, border:"none", cursor:"pointer",
+                            background:"rgba(99,102,241,0.3)", fontSize:18, flexShrink:0,
+                            display:"flex", alignItems:"center", justifyContent:"center" }}>
+                            🎯
+                          </button>
+                        )}
+                        <button onClick={() => setPickMode(p => p===pickId ? null : pickId)}
+                          style={{ width:44, height:44, borderRadius:12, border:"none", cursor:"pointer",
+                            background: pickMode===pickId ? color : "rgba(255,255,255,0.08)",
+                            fontSize:18, flexShrink:0,
+                            display:"flex", alignItems:"center", justifyContent:"center" }}>
+                          📍
+                        </button>
+                      </div>
+
+                      {/* Sugestões */}
+                      {sugg.length > 0 && (
+                        <div style={{ position:"absolute", left:0, right:0, top:"100%", zIndex:50,
+                          background:"#1e1b4b", borderRadius:12, overflow:"hidden",
+                          border:"1px solid rgba(255,255,255,0.12)", boxShadow:"0 8px 32px rgba(0,0,0,0.5)",
+                          maxHeight:200, overflowY:"auto" }}>
+                          {sugg.slice(0,5).map(s => (
+                            <button key={s.stop_id} onClick={() => {
+                              const pt2 = { lat: s.stop_lat, lon: s.stop_lon, label: s.stop_name };
+                              if (isFrom) { setFromPt(pt2); setFromQuery(s.stop_name); setFromSugg([]); if (toPt) planRoute(pt2, toPt); }
+                              else        { setToPt(pt2);   setToQuery(s.stop_name);   setToSugg([]);   if (fromPt) planRoute(fromPt, pt2); }
+                            }}
+                            style={{ display:"block", width:"100%", padding:"11px 14px", textAlign:"left",
+                              background:"none", border:"none", borderBottom:"1px solid rgba(255,255,255,0.06)",
+                              cursor:"pointer", color:"#fff", fontSize:12 }}>
+                              {isFrom ? "🟢" : "🔴"} {s.stop_name}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+
+                {/* Estado vazio */}
+                {!fromPt && !toPt && !routeLoading && (
+                  <div style={{ textAlign:"center", padding:"24px 0",
+                    color:"rgba(255,255,255,0.35)", fontSize:13, lineHeight:1.8 }}>
+                    Digite a origem e o destino acima<br/>
+                    ou toque 📍 e clique no mapa
+                  </div>
+                )}
+
+                {routeLoading && (
+                  <div style={{ textAlign:"center", padding:"28px 0",
+                    color:"rgba(255,255,255,0.4)", fontSize:13 }}>
+                    Calculando rotas…
+                  </div>
+                )}
+
+                {/* Resultados */}
+                {routePlan && routePlan.routes.length === 0 && !routeLoading && (
+                  <div style={{ textAlign:"center", padding:"24px 0",
+                    color:"rgba(255,255,255,0.35)", fontSize:13 }}>
+                    Nenhuma rota encontrada. Tente pontos mais próximos a paradas de ônibus.
+                  </div>
+                )}
+
+                {routePlan && routePlan.routes.length > 0 && (
+                  <>
+                    <div style={{ fontSize:10, color:"rgba(255,255,255,0.4)", fontWeight:700,
+                      textTransform:"uppercase", letterSpacing:"0.06em" }}>
+                      {routePlan.routes.length} opção{routePlan.routes.length!==1?"ões":""} encontrada{routePlan.routes.length!==1?"s":""}
+                    </div>
+                    {routePlan.routes.map((route, ri) => {
+                      const isSelected = selectedRoute === route;
+                      const pct = route.comfort_pct;
+                      const comfortColor = pct<40 ? "#10b981" : pct<65 ? "#f59e0b" : pct<80 ? "#f97316" : "#f43f5e";
+                      return (
+                        <motion.div key={ri}
+                          initial={{ opacity:0, y:12 }} animate={{ opacity:1, y:0 }}
+                          transition={{ delay: ri*0.07 }}
+                          onClick={() => setSelectedRoute(route)}
+                          style={{ background:"#fff", borderRadius:20, padding:"16px 18px",
+                            cursor:"pointer", position:"relative", overflow:"hidden",
+                            boxShadow: isSelected
+                              ? "0 0 0 2px #7c3aed, 0 4px 20px rgba(99,102,241,0.2)"
+                              : "0 2px 12px rgba(0,0,0,0.08)" }}>
+
+                          {/* Header */}
+                          <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12 }}>
+                            <div style={{ width:40, height:40, borderRadius:13, flexShrink:0,
+                              background: route.type==="direct"
+                                ? "linear-gradient(135deg,#6366f1,#818cf8)"
+                                : "linear-gradient(135deg,#f59e0b,#fbbf24)",
+                              display:"flex", alignItems:"center", justifyContent:"center", fontSize:20 }}>
+                              {route.type==="direct" ? "⚡" : "🔀"}
+                            </div>
+                            <div style={{ flex:1, minWidth:0 }}>
+                              <div style={{ fontSize:13, fontWeight:800, color:"#0f172a",
+                                overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                                {route.label}
+                              </div>
+                              <div style={{ fontSize:10, color:"#64748b", marginTop:1 }}>
+                                {route.type==="direct" ? "Rota direta" : `1 baldeação · ${route.transfer_stop?.split("-")[0].trim()}`}
+                              </div>
+                            </div>
+                            <div style={{ textAlign:"right", flexShrink:0 }}>
+                              <div style={{ fontSize:20, fontWeight:900, color:"#0f172a", lineHeight:1 }}>
+                                {route.total_duration_min}
+                              </div>
+                              <div style={{ fontSize:9, color:"#94a3b8", fontWeight:700 }}>min</div>
+                            </div>
+                          </div>
+
+                          {/* Timeline das pernas */}
+                          <div style={{ display:"flex", flexDirection:"column", gap:6, marginBottom:12 }}>
+                            {route.legs.map((leg, li) => (
+                              <div key={li} style={{ display:"flex", alignItems:"center", gap:8 }}>
+                                <div style={{ width:6, height:6, borderRadius:"50%", flexShrink:0,
+                                  background: li===0 ? "#10b981" : "#7c3aed" }} />
+                                <div style={{ flex:1, minWidth:0 }}>
+                                  <div style={{ fontSize:10, color:"#475569", fontWeight:600,
+                                    overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                                    {leg.from_stop_name}
+                                  </div>
+                                </div>
+                                <div style={{ padding:"2px 8px", borderRadius:99, fontSize:9,
+                                  fontWeight:800, background:"rgba(99,102,241,0.1)",
+                                  color:"#6366f1", flexShrink:0 }}>
+                                  {leg.line_name} · {leg.duration_min}min
+                                </div>
+                              </div>
+                            ))}
+                            <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                              <div style={{ width:6, height:6, borderRadius:"50%", flexShrink:0, background:"#f43f5e" }} />
+                              <div style={{ flex:1, minWidth:0 }}>
+                                <div style={{ fontSize:10, color:"#475569", fontWeight:600,
+                                  overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                                  {route.legs[route.legs.length-1].to_stop_name}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Footer: caminhada + conforto */}
+                          <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+                            <span style={{ padding:"3px 9px", borderRadius:99, fontSize:9, fontWeight:700,
+                              background:"rgba(100,116,139,0.1)", color:"#64748b" }}>
+                              🚶 {route.walk_min}min a pé
+                            </span>
+                            <span style={{ padding:"3px 9px", borderRadius:99, fontSize:9, fontWeight:700,
+                              background:`${comfortColor}18`, color:comfortColor }}>
+                              {pct<40?"🪑 Vai sentado":pct<65?"🪑 Provavelmente sentado":pct<80?"🧍 Em pé":"😰 Muito cheio"}
+                            </span>
+                          </div>
+                        </motion.div>
+                      );
+                    })}
                   </>
                 )}
               </div>

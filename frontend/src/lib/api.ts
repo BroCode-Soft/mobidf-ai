@@ -68,8 +68,34 @@ export const api = {
       }),
     demoMaria: () => apiFetch<DemoMaria>("/cidadao/demo/maria"),
     cartaoSaldo: (numero: string) => apiFetch<CartaoSaldo>(`/cidadao/cartao/${encodeURIComponent(numero)}/saldo`),
+    planRoute: (fromLat: number, fromLon: number, toLat: number, toLon: number) =>
+      apiFetch<RoutePlan>(`/cidadao/routes/plan?from_lat=${fromLat}&from_lon=${fromLon}&to_lat=${toLat}&to_lon=${toLon}`),
   },
 };
+
+// ---- Route Planning Types ----
+export interface RouteLeg {
+  from_stop_id: string; from_stop_name: string; from_lat: number; from_lon: number;
+  to_stop_id: string;   to_stop_name: string;   to_lat: number;   to_lon: number;
+  line_id: string; line_name: string; line_desc: string; line_tipo: string;
+  duration_min: number;
+}
+export interface Route {
+  type: "direct" | "transfer";
+  label: string;
+  legs: RouteLeg[];
+  total_duration_min: number;
+  walk_min: number;
+  transfers: number;
+  transfer_stop?: string;
+  comfort_pct: number;
+  comfort: string;
+}
+export interface RoutePlan {
+  from: { lat: number; lon: number; nearest_stop: Stop | null };
+  to:   { lat: number; lon: number; nearest_stop: Stop | null };
+  routes: Route[];
+}
 
 // ---- Types ----
 export interface GestorDashboard {
