@@ -94,14 +94,14 @@ jobs:
 
       - name: Pull latest images
         run: |
-          docker-compose pull
+          docker compose pull
         env:
           COMPOSE_FILE: docker-compose.yml
 
       - name: Restart services
         run: |
-          docker-compose down
-          docker-compose up -d
+          docker compose down
+          docker compose up -d
         env:
           COMPOSE_FILE: docker-compose.yml
 
