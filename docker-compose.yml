@@ -1,0 +1,112 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgis/postgis:17-3.4
+    container_name: mobidf-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-mobidf}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mobidf_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-mobidf}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/01_extensions.sql:/docker-entrypoint-initdb.d/01_extensions.sql:ro
+      - ./database/02_tables.sql:/docker-entrypoint-initdb.d/02_tables.sql:ro
+      - ./database/03_indexes.sql:/docker-entrypoint-initdb.d/03_indexes.sql:ro
+      - ./database/04_functions.sql:/docker-entrypoint-initdb.d/04_functions.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mobidf}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - mobidf-net
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        BUILD_DATE: ${BUILD_DATE:-$(date -u +'%Y-%m-%dT%H:%M:%SZ')}
+        VCS_REF: ${VCS_REF:-latest}
+        VERSION: ${VERSION:-latest}
+    container_name: mobidf-backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-mobidf}:${POSTGRES_PASSWORD:-mobidf_secret}@postgres:5432/${POSTGRES_DB:-mobidf}
+      DATABASE_URL_SYNC: postgresql://${POSTGRES_USER:-mobidf}:${POSTGRES_PASSWORD:-mobidf_secret}@postgres:5432/${POSTGRES_DB:-mobidf}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,https://mobidf.brocode.net.br}
+      SECRET_KEY: ${SECRET_KEY:-change_me_in_production}
+      DEBUG: ${DEBUG:-false}
+      GTFS_DF_URL: ${GTFS_DF_URL:-https://www.dados.df.gov.br/dataset/gtfs-df/resource/gtfs-df.zip}
+      GTFS_RT_URL: ${GTFS_RT_URL:-}
+      IBGE_API_URL: ${IBGE_API_URL:-https://servicodados.ibge.gov.br/api/v3}
+      GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY:-}
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - backend_data:/app/data
+    networks:
+      - mobidf-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health', timeout=5.0)"]
+      interval: 30s
+      timeout: 10s
+      start_period: 40s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NODE_VERSION: 20-alpine
+        BUILD_DATE: ${BUILD_DATE:-$(date -u +'%Y-%m-%dT%H:%M:%SZ')}
+        VCS_REF: ${VCS_REF:-latest}
+        VERSION: ${VERSION:-latest}
+    container_name: mobidf-frontend
+    depends_on:
+      - backend
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      NODE_ENV: ${NODE_ENV:-production}
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+      - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - frontend_cache:/app/.next/cache
+    networks:
+      - mobidf-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000', (r) => {if (r.statusCode !== 200) throw new Error(r.statusCode)})"]
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
+
+volumes:
+  postgres_data:
+    driver: local
+    labels:
+      description: "PostgreSQL database persistent storage"
+  backend_data:
+    driver: local
+    labels:
+      description: "Backend application data, cache, and ETL artifacts"
+  frontend_cache:
+    driver: local
+    labels:
+      description: "Next.js build cache for faster rebuilds"
+
+networks:
+  mobidf-net:
+    driver: bridge
+    labels:
+      description: "MobiDF internal service network"

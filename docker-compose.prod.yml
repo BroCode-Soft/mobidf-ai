@@ -1,0 +1,54 @@
+# Docker Compose override for production
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# 
+# This configuration:
+# - Removes direct port exposure (handled by nginx reverse proxy)
+# - Adjusts CORS origins for production domain
+# - Uses production environment variables
+# - Enables more restrictive resource limits
+
+version: '3.8'
+
+services:
+  postgres:
+    # PostgreSQL only accessible internally, not exposed to host ports
+    ports: []
+    # Add resource limits for production
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 1G
+
+  backend:
+    # Backend API only accessible via nginx reverse proxy
+    ports: []
+    environment:
+      CORS_ORIGINS: https://mobidf.brocode.net.br
+      DEBUG: 'false'
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '1'
+          memory: 512M
+
+  frontend:
+    # Frontend only accessible via nginx reverse proxy
+    ports: []
+    environment:
+      NEXT_PUBLIC_API_URL: https://mobidf.brocode.net.br/api
+      NODE_ENV: production
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 512M
+        reservations:
+          cpus: '1'
+          memory: 256M

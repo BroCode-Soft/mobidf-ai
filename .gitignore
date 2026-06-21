@@ -19,8 +19,10 @@ out/
 .vercel/
 *.tsbuildinfo
 
-# Docker volumes
+# Docker volumes & containers
 pgdata/
+postgres_data/
+docker-compose.override.yml
 
 # OS
 .DS_Store
@@ -34,3 +36,14 @@ logs/
 .vscode/
 .idea/
 *.swp
+
+# Environment & Secrets
+.env
+.env.local
+.env.*.local
+.docker/config.json
+
+# Build artifacts
+dist/
+build/
+.turbo/

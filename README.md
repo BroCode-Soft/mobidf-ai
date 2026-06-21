@@ -33,6 +33,175 @@ Pronto. O script cria o virtualenv, instala as dependências e sobe os dois serv
 
 ---
 
+## Docker Compose (Desenvolvimento & Produção)
+
+### Desenvolvimento Local
+
+Para rodar o stack completo com **PostgreSQL + PostGIS + Backend + Frontend**:
+
+```bash
+# Copiar arquivo de exemplo e editar se necessário
+cp .env.example .env
+
+# Subir todos os serviços
+docker-compose up -d
+
+# Verificar status
+docker-compose ps
+docker-compose logs -f
+
+# Acessar
+# - Frontend: http://localhost:3000
+# - API Swagger: http://localhost:8000/docs
+# - PostgreSQL: localhost:5432
+
+# Parar
+docker-compose down
+
+# Limpar tudo (banco + volumes)
+docker-compose down -v
+```
+
+**Variáveis de Ambiente (.env)**
+
+```bash
+# PostgreSQL
+POSTGRES_USER=mobidf
+POSTGRES_PASSWORD=mobidf_secret
+POSTGRES_DB=mobidf
+
+# Backend
+SECRET_KEY=sua-chave-secreta
+CORS_ORIGINS=http://localhost:3000
+DEBUG=false
+
+# Frontend
+NEXT_PUBLIC_API_URL=http://localhost:8000
+
+# Portas
+POSTGRES_PORT=5432
+BACKEND_PORT=8000
+FRONTEND_PORT=3000
+```
+
+### Produção com Nginx Reverse Proxy
+
+Para expor a aplicação em `mobidf.brocode.net.br` com nginx:
+
+```bash
+# 1. Configurar nginx (automático)
+cd infra
+sudo ./setup-nginx.sh
+
+# 2. Atualizar .env para produção
+cp .env.example .env
+
+# Editar .env com:
+# CORS_ORIGINS=https://mobidf.brocode.net.br
+# NEXT_PUBLIC_API_URL=https://mobidf.brocode.net.br/api
+
+# 3. Subir com compose de produção
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+# 4. Verificar
+docker-compose ps
+curl https://mobidf.brocode.net.br/health
+
+# Acessar
+# - Frontend: https://mobidf.brocode.net.br
+# - Backend API: https://mobidf.brocode.net.br/api
+# - API Docs: https://mobidf.brocode.net.br/api/docs
+```
+
+**Arquitetura em Produção**
+
+```
+Internet
+    ↓
+Nginx Reverse Proxy (mobidf.brocode.net.br)
+    ├─ / → Frontend (localhost:3000)
+    └─ /api/ → Backend API (localhost:8000)
+    ↓
+Docker Services
+    ├─ PostgreSQL + PostGIS
+    ├─ FastAPI Backend
+    └─ Next.js Frontend
+```
+
+**Volumes Persistentes**
+
+- `postgres_data` — Banco de dados PostgreSQL
+- `backend_data` — Dados de aplicação (cache ETL, uploads)
+- `frontend_cache` — Cache de build Next.js
+
+Ver mais em: [infra/README.md](infra/README.md)
+
+---
+
+## GitHub Actions + Container Registry
+
+Deploy automático a cada `git push main`:
+
+### 1. Configurar GitHub Container Registry (ghcr.io)
+
+O `GITHUB_TOKEN` já vem automático; nenhuma configuração extra necessária.
+
+### 2. Configurar Self-Hosted Runner
+
+No servidor local onde quer fazer deploy:
+
+```bash
+# 1. Criar pasta
+mkdir -p ~/actions-runner
+cd ~/actions-runner
+
+# 2. Baixar runner (substitua TOKEN e REPO)
+curl -o actions-runner-linux-x64-2.x.x.tar.gz -L https://github.com/actions/runner/releases/download/v2.x.x/actions-runner-linux-x64-2.x.x.tar.gz
+tar xzf ./actions-runner-linux-x64-2.x.x.tar.gz
+
+# 3. Configurar (obter token em https://github.com/BroCode-Soft/mobidf-ai/settings/actions/runners/new)
+./config.sh --url https://github.com/BroCode-Soft/mobidf-ai --token SEU_TOKEN
+
+# 4. Testar
+./run.sh
+
+# 5. (Opcional) Instalar como serviço systemd
+sudo ./svc.sh install
+sudo ./svc.sh start
+```
+
+### 3. Garantir Docker no Runner
+
+```bash
+# No servidor, confirmar que o docker está acessível
+docker ps
+docker-compose version
+
+# Se não tiver, instalar:
+sudo apt-get install -y docker.io docker-compose
+sudo usermod -aG docker $USER
+```
+
+### 4. Deploy Flow
+
+```
+git push main
+  ↓
+GitHub Actions Workflow dispara
+  ├─ Build backend image → ghcr.io/BroCode-Soft/mobidf-backend:main-<sha>
+  ├─ Build frontend image → ghcr.io/BroCode-Soft/mobidf-frontend:main-<sha>
+  ├─ Push para ghcr.io
+  └─ Self-hosted runner:
+     ├─ docker login ghcr.io
+     ├─ docker-compose pull
+     ├─ docker-compose down
+     └─ docker-compose up -d
+```
+
+Ver logs do workflow: https://github.com/BroCode-Soft/mobidf-ai/actions
+
+---
+
 ## O que é
 
 O DF tem 4,6 milhões de habitantes e um problema: tudo passa pela Rodoviária do Plano Piloto. Quem mora em Ceilândia e trabalha no SIA gasta 4h/dia em ônibus com 2 baldeações obrigatórias.
