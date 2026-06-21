@@ -27,6 +27,9 @@ services:
           memory: 1G
 
   backend:
+    # Use explicit image with latest tag from GitHub Container Registry
+    image: ghcr.io/brocode-soft/mobidf-ai/mobidf-backend:latest
+    pull_policy: always
     # Backend API only accessible via nginx reverse proxy
     ports: []
     env_file:
@@ -44,6 +47,9 @@ services:
           memory: 512M
 
   frontend:
+    # Use explicit image with latest tag from GitHub Container Registry
+    image: ghcr.io/brocode-soft/mobidf-ai/mobidf-frontend:latest
+    pull_policy: always
     # Frontend only accessible via nginx reverse proxy
     ports: []
     env_file:

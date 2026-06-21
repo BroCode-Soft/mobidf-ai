@@ -42,6 +42,7 @@ jobs:
             type=sha,prefix=sha-,format=short
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
 
       - name: Extract metadata (frontend)
         id: meta-frontend
@@ -54,6 +55,7 @@ jobs:
             type=sha,prefix=sha-,format=short
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
 
       - name: Build and push Backend image
         uses: docker/build-push-action@v5
@@ -134,11 +136,16 @@ jobs:
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-      - name: Pull latest images
+      - name: Remove old images and pull latest
         run: |
-          docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
+          echo "Removing old container images..."
+          docker rmi ghcr.io/brocode-soft/mobidf-ai/mobidf-backend:latest 2>/dev/null || true
+          docker rmi ghcr.io/brocode-soft/mobidf-ai/mobidf-frontend:latest 2>/dev/null || true
           
-          echo "✓ Latest images pulled from registry"
+          echo "Pulling latest images from registry..."
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml pull --policy=always
+          
+          echo "✓ Latest images pulled and ready for deployment"
 
       - name: Restart services with production overrides
         run: |
@@ -147,6 +154,21 @@ jobs:
           
           echo "✓ Services restarted with production configuration"
           echo "✓ Loading .env.production automatically"
+          
+          # Show which images are running
+          echo ""
+          echo "Images deployed:"
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml images
+          
+          echo ""
+          echo "Backend image:"
+          docker image ls | grep mobidf-backend || echo "Checking backend image..."
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml ps backend
+          
+          echo ""
+          echo "Frontend image:"
+          docker image ls | grep mobidf-frontend || echo "Checking frontend image..."
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml ps frontend
 
       - name: Check service health
         run: |
