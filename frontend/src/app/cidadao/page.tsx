@@ -338,11 +338,13 @@ export default function CidadaoPage() {
   type Pt = { lat: number; lon: number; label: string };
   const [fromPt,      setFromPt]      = useState<Pt | null>(null);
   const [toPt,        setToPt]        = useState<Pt | null>(null);
-  const [pickMode,    setPickMode]    = useState<"origin"|"destination"|null>(null);
-  const [fromQuery,   setFromQuery]   = useState("");
+  const [pickMode,    setPickMode]    = useState<"destination"|null>(null);
   const [toQuery,     setToQuery]     = useState("");
-  const [fromSugg,    setFromSugg]    = useState<Stop[]>([]);
   const [toSugg,      setToSugg]      = useState<Stop[]>([]);
+  const [routeGpsLoading, setRouteGpsLoading] = useState(false);
+  const [routeGpsError,   setRouteGpsError]   = useState<string | null>(null);
+  const toPtRef = useRef<Pt | null>(null);
+  useEffect(() => { toPtRef.current = toPt; }, [toPt]);
   const [routePlan,   setRoutePlan]   = useState<RoutePlan | null>(null);
   const [routeLoading,setRouteLoading]= useState(false);
   const [selectedRoute, setSelectedRoute] = useState<Route | null>(null);
@@ -374,7 +376,7 @@ export default function CidadaoPage() {
     } catch { /* ignore */ }
   }, []);
 
-  // Busca parceiros próximos quando há parada selecionada ou ponto de origem
+  // Busca parceiros próximos quando há parada selecionada ou localização do usuário
   useEffect(() => {
     const lat = selectedStop?.stop_lat ?? fromPt?.lat;
     const lon = selectedStop?.stop_lon ?? fromPt?.lon;
@@ -403,6 +405,30 @@ export default function CidadaoPage() {
     }
   }
 
+  // Auto-detecta GPS ao entrar na aba Rotas e define fromPt automaticamente
+  useEffect(() => {
+    if (tab !== "rotas") return;
+    if (fromPt) return;
+    if (!navigator.geolocation) { setRouteGpsError("GPS não disponível neste dispositivo."); return; }
+    setRouteGpsLoading(true); setRouteGpsError(null);
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        const pt = { lat: pos.coords.latitude, lon: pos.coords.longitude, label: "Minha localização" };
+        setFromPt(pt);
+        setUserLoc({ lat: pos.coords.latitude, lon: pos.coords.longitude });
+        setRouteGpsLoading(false);
+        if (toPtRef.current) planRoute(pt, toPtRef.current);
+      },
+      err => {
+        setRouteGpsLoading(false);
+        if (err.code === 1) setRouteGpsError("Permissão de GPS negada. Toque em 🎯 para tentar novamente.");
+        else setRouteGpsError("Não foi possível obter sua localização.");
+      },
+      { timeout: 10000, enableHighAccuracy: true }
+    );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
+
   const planRoute = useCallback(async (from: Pt, to: Pt) => {
     setRouteLoading(true); setRoutePlan(null); setSelectedRoute(null);
     trackEvent("route_planned", `${from.label}→${to.label}`);
@@ -415,26 +441,13 @@ export default function CidadaoPage() {
   }, []);
 
   const handleMapClick = useCallback((lat: number, lon: number) => {
-    if (!pickMode) return;
+    if (pickMode !== "destination") return;
     const label = `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
-    if (pickMode === "origin") {
-      const pt = { lat, lon, label };
-      setFromPt(pt); setFromQuery(label); setFromSugg([]);
-      setPickMode(null);
-      if (toPt) planRoute(pt, toPt);
-    } else {
-      const pt = { lat, lon, label };
-      setToPt(pt); setToQuery(label); setToSugg([]);
-      setPickMode(null);
-      if (fromPt) planRoute(fromPt, pt);
-    }
-  }, [pickMode, fromPt, toPt, planRoute]);
-
-  useEffect(() => {
-    if (!fromQuery.trim() || fromQuery.includes(",")) { setFromSugg([]); return; }
-    const t = setTimeout(() => api.cidadao.searchStops(fromQuery).then(setFromSugg).catch(()=>{}), 350);
-    return () => clearTimeout(t);
-  }, [fromQuery]);
+    const pt = { lat, lon, label };
+    setToPt(pt); setToQuery(label); setToSugg([]);
+    setPickMode(null);
+    if (fromPt) planRoute(fromPt, pt);
+  }, [pickMode, fromPt, planRoute]);
 
   useEffect(() => {
     if (!toQuery.trim() || toQuery.includes(",")) { setToSugg([]); return; }
@@ -625,27 +638,21 @@ export default function CidadaoPage() {
             pickMode={pickMode}
             onMapClick={handleMapClick}
             onPoiSelect={(poi, as) => {
+              if (as !== "destination") return;
               const pt2 = { lat: poi.lat, lon: poi.lon, label: poi.name };
-              if (as === "origin")      { setFromPt(pt2); setFromQuery(poi.name); setFromSugg([]); if (toPt)   planRoute(pt2, toPt); }
-              else                      { setToPt(pt2);   setToQuery(poi.name);   setToSugg([]);   if (fromPt) planRoute(fromPt, pt2); }
+              setToPt(pt2); setToQuery(poi.name); setToSugg([]);
+              if (fromPt) planRoute(fromPt, pt2);
             }}
           />
-          {/* Botões de modo de clique */}
+          {/* Botão para definir destino no mapa */}
           <div style={{ position:"absolute", bottom:10, left:"50%", transform:"translateX(-50%)",
             zIndex:1000, display:"flex", gap:6 }}>
-            <button onClick={() => setPickMode(p => p==="origin" ? null : "origin")}
-              style={{ padding:"7px 14px", borderRadius:99, border:"none", cursor:"pointer",
-                fontSize:11, fontWeight:700,
-                background: pickMode==="origin" ? "#10b981" : "rgba(16,185,129,0.25)",
-                color:"#fff", boxShadow:"0 2px 8px rgba(0,0,0,0.3)" }}>
-              📍 Definir Origem
-            </button>
             <button onClick={() => setPickMode(p => p==="destination" ? null : "destination")}
               style={{ padding:"7px 14px", borderRadius:99, border:"none", cursor:"pointer",
                 fontSize:11, fontWeight:700,
                 background: pickMode==="destination" ? "#f43f5e" : "rgba(244,63,94,0.25)",
                 color:"#fff", boxShadow:"0 2px 8px rgba(0,0,0,0.3)" }}>
-              🏁 Definir Destino
+              🏁 Tocar para definir destino
             </button>
           </div>
         </div>
@@ -943,112 +950,142 @@ export default function CidadaoPage() {
                               overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{poi.name}</div>
                             {poi.address && <div style={{ fontSize:10, color:"rgba(255,255,255,0.4)", marginTop:1 }}>{poi.address}</div>}
                           </div>
-                          <div style={{ display:"flex", gap:5, flexShrink:0 }}>
-                            <button onClick={() => {
-                              const pt2 = { lat:poi.lat, lon:poi.lon, label:poi.name };
-                              setFromPt(pt2); setFromQuery(poi.name); setFromSugg([]);
-                              if (toPt) planRoute(pt2, toPt);
-                            }}
-                            style={{ padding:"4px 9px", borderRadius:99, border:"none", cursor:"pointer",
-                              background:"rgba(16,185,129,0.2)", color:"#34d399", fontSize:10, fontWeight:700 }}>
-                              De
-                            </button>
-                            <button onClick={() => {
+                          <button onClick={() => {
                               const pt2 = { lat:poi.lat, lon:poi.lon, label:poi.name };
                               setToPt(pt2); setToQuery(poi.name); setToSugg([]);
                               if (fromPt) planRoute(fromPt, pt2);
                             }}
                             style={{ padding:"4px 9px", borderRadius:99, border:"none", cursor:"pointer",
-                              background:"rgba(244,63,94,0.2)", color:"#fb7185", fontSize:10, fontWeight:700 }}>
-                              Para
-                            </button>
-                          </div>
+                              background:"rgba(244,63,94,0.2)", color:"#fb7185", fontSize:10, fontWeight:700, flexShrink:0 }}>
+                              Ir para
+                          </button>
                         </div>
                       );
                     })}
                   </div>
                 )}
 
-                {/* ── Inputs De / Para ── */}
-                {(["from","to"] as const).map((side) => {
-                  const isFrom   = side === "from";
-                  const query    = isFrom ? fromQuery  : toQuery;
-                  const setQuery = isFrom ? setFromQuery : setToQuery;
-                  const sugg     = isFrom ? fromSugg   : toSugg;
-                  const pt       = isFrom ? fromPt     : toPt;
-                  const color    = isFrom ? "#10b981"  : "#f43f5e";
-                  const label    = isFrom ? "De (Origem)" : "Para (Destino)";
-                  const pickId   = isFrom ? "origin" as const : "destination" as const;
-                  return (
-                    <div key={side} style={{ position:"relative" }}>
-                      <div style={{ display:"flex", gap:6 }}>
-                        <div style={{ flex:1, position:"relative" }}>
-                          <span style={{ position:"absolute", left:12, top:"50%", transform:"translateY(-50%)",
-                            fontSize:14, pointerEvents:"none" }}>{isFrom ? "🟢" : "🔴"}</span>
-                          <input
-                            style={{ width:"100%", padding:"12px 12px 12px 36px", borderRadius:14,
-                              border: pt ? `1.5px solid ${color}55` : "1.5px solid rgba(255,255,255,0.12)",
-                              background:"rgba(255,255,255,0.1)", color:"#fff", fontSize:13,
-                              outline:"none", boxSizing:"border-box" }}
-                            placeholder={label}
-                            value={query}
-                            onChange={e => { setQuery(e.target.value); if (isFrom) setFromPt(null); else setToPt(null); }}
-                          />
+                {/* ── Origem: status de GPS automático ── */}
+                <div style={{ display:"flex", alignItems:"center", gap:10,
+                  padding:"10px 14px", borderRadius:14,
+                  background: fromPt ? "rgba(16,185,129,0.1)" : "rgba(255,255,255,0.06)",
+                  border: fromPt ? "1.5px solid rgba(16,185,129,0.3)" : "1.5px solid rgba(255,255,255,0.1)" }}>
+                  {routeGpsLoading ? (
+                    <>
+                      <div style={{ width:16, height:16, border:"2px solid rgba(255,255,255,0.2)",
+                        borderTopColor:"#10b981", borderRadius:"50%", animation:"spin 0.7s linear infinite",
+                        flexShrink:0 }} />
+                      <span style={{ fontSize:12, color:"rgba(255,255,255,0.5)" }}>Detectando sua localização…</span>
+                    </>
+                  ) : fromPt ? (
+                    <>
+                      <span style={{ fontSize:16, flexShrink:0 }}>📍</span>
+                      <div style={{ flex:1, minWidth:0 }}>
+                        <div style={{ fontSize:11, color:"#34d399", fontWeight:700 }}>PARTINDO DE</div>
+                        <div style={{ fontSize:12, color:"#fff", marginTop:1,
+                          overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                          {routePlan?.from.nearest_stop?.stop_name ?? "Sua localização"}
                         </div>
-                        {isFrom && (
-                          <button onClick={() => {
-                            if (!navigator.geolocation) return;
-                            navigator.geolocation.getCurrentPosition(pos => {
-                              const pt2 = { lat: pos.coords.latitude, lon: pos.coords.longitude, label:"Minha localização" };
-                              setFromPt(pt2); setFromQuery("Minha localização"); setFromSugg([]);
-                              if (toPt) planRoute(pt2, toPt);
-                            });
-                          }}
-                          style={{ width:44, height:44, borderRadius:12, border:"none", cursor:"pointer",
-                            background:"rgba(99,102,241,0.3)", fontSize:18, flexShrink:0,
-                            display:"flex", alignItems:"center", justifyContent:"center" }}>
-                            🎯
-                          </button>
-                        )}
-                        <button onClick={() => setPickMode(p => p===pickId ? null : pickId)}
-                          style={{ width:44, height:44, borderRadius:12, border:"none", cursor:"pointer",
-                            background: pickMode===pickId ? color : "rgba(255,255,255,0.08)",
-                            fontSize:18, flexShrink:0,
-                            display:"flex", alignItems:"center", justifyContent:"center" }}>
-                          📍
-                        </button>
                       </div>
-
-                      {/* Sugestões */}
-                      {sugg.length > 0 && (
-                        <div style={{ position:"absolute", left:0, right:0, top:"100%", zIndex:50,
-                          background:"#1e1b4b", borderRadius:12, overflow:"hidden",
-                          border:"1px solid rgba(255,255,255,0.12)", boxShadow:"0 8px 32px rgba(0,0,0,0.5)",
-                          maxHeight:200, overflowY:"auto" }}>
-                          {sugg.slice(0,5).map(s => (
-                            <button key={s.stop_id} onClick={() => {
-                              const pt2 = { lat: s.stop_lat, lon: s.stop_lon, label: s.stop_name };
-                              if (isFrom) { setFromPt(pt2); setFromQuery(s.stop_name); setFromSugg([]); if (toPt) planRoute(pt2, toPt); }
-                              else        { setToPt(pt2);   setToQuery(s.stop_name);   setToSugg([]);   if (fromPt) planRoute(fromPt, pt2); }
-                            }}
-                            style={{ display:"block", width:"100%", padding:"11px 14px", textAlign:"left",
-                              background:"none", border:"none", borderBottom:"1px solid rgba(255,255,255,0.06)",
-                              cursor:"pointer", color:"#fff", fontSize:12 }}>
-                              {isFrom ? "🟢" : "🔴"} {s.stop_name}
-                            </button>
-                          ))}
+                      <button onClick={() => {
+                        setRouteGpsLoading(true); setRouteGpsError(null); setFromPt(null);
+                        navigator.geolocation?.getCurrentPosition(pos => {
+                          const pt = { lat: pos.coords.latitude, lon: pos.coords.longitude, label: "Minha localização" };
+                          setFromPt(pt); setUserLoc({ lat: pos.coords.latitude, lon: pos.coords.longitude });
+                          setRouteGpsLoading(false);
+                          if (toPtRef.current) planRoute(pt, toPtRef.current);
+                        }, () => setRouteGpsLoading(false), { timeout: 8000 });
+                      }} style={{ background:"none", border:"none", color:"rgba(255,255,255,0.3)",
+                        cursor:"pointer", fontSize:12, flexShrink:0, padding:4 }} title="Atualizar localização">
+                        🔄
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <span style={{ fontSize:16, flexShrink:0 }}>📍</span>
+                      <div style={{ flex:1, minWidth:0 }}>
+                        <div style={{ fontSize:12, color: routeGpsError ? "#fb7185" : "rgba(255,255,255,0.4)" }}>
+                          {routeGpsError ?? "Aguardando localização…"}
                         </div>
-                      )}
+                      </div>
+                      <button onClick={() => {
+                        if (!navigator.geolocation) return;
+                        setRouteGpsLoading(true); setRouteGpsError(null);
+                        navigator.geolocation.getCurrentPosition(pos => {
+                          const pt = { lat: pos.coords.latitude, lon: pos.coords.longitude, label: "Minha localização" };
+                          setFromPt(pt); setUserLoc({ lat: pos.coords.latitude, lon: pos.coords.longitude });
+                          setRouteGpsLoading(false);
+                          if (toPtRef.current) planRoute(pt, toPtRef.current);
+                        }, err => {
+                          setRouteGpsLoading(false);
+                          setRouteGpsError(err.code === 1 ? "Permissão negada." : "GPS indisponível.");
+                        }, { timeout: 8000, enableHighAccuracy: true });
+                      }} style={{ padding:"5px 12px", borderRadius:99, border:"none", cursor:"pointer",
+                        background:"rgba(99,102,241,0.3)", color:"#a5b4fc", fontSize:11, fontWeight:700, flexShrink:0 }}>
+                        🎯 Tentar
+                      </button>
+                    </>
+                  )}
+                </div>
+
+                {/* ── Destino ── */}
+                <div style={{ position:"relative" }}>
+                  <div style={{ display:"flex", gap:6 }}>
+                    <div style={{ flex:1, position:"relative" }}>
+                      <span style={{ position:"absolute", left:12, top:"50%", transform:"translateY(-50%)",
+                        fontSize:14, pointerEvents:"none" }}>🔴</span>
+                      <input
+                        style={{ width:"100%", padding:"12px 12px 12px 36px", borderRadius:14,
+                          border: toPt ? "1.5px solid rgba(244,63,94,0.4)" : "1.5px solid rgba(255,255,255,0.12)",
+                          background:"rgba(255,255,255,0.1)", color:"#fff", fontSize:13,
+                          outline:"none", boxSizing:"border-box" }}
+                        placeholder="Para onde você vai?"
+                        value={toQuery}
+                        onChange={e => { setToQuery(e.target.value); setToPt(null); }}
+                      />
                     </div>
-                  );
-                })}
+                    <button onClick={() => setPickMode(p => p==="destination" ? null : "destination")}
+                      style={{ width:44, height:44, borderRadius:12, border:"none", cursor:"pointer",
+                        background: pickMode==="destination" ? "#f43f5e" : "rgba(255,255,255,0.08)",
+                        fontSize:18, flexShrink:0,
+                        display:"flex", alignItems:"center", justifyContent:"center" }}>
+                      📍
+                    </button>
+                  </div>
+
+                  {toSugg.length > 0 && (
+                    <div style={{ position:"absolute", left:0, right:0, top:"100%", zIndex:50,
+                      background:"#1e1b4b", borderRadius:12, overflow:"hidden",
+                      border:"1px solid rgba(255,255,255,0.12)", boxShadow:"0 8px 32px rgba(0,0,0,0.5)",
+                      maxHeight:200, overflowY:"auto" }}>
+                      {toSugg.slice(0,5).map(s => (
+                        <button key={s.stop_id} onClick={() => {
+                          const pt2 = { lat: s.stop_lat, lon: s.stop_lon, label: s.stop_name };
+                          setToPt(pt2); setToQuery(s.stop_name); setToSugg([]);
+                          if (fromPt) planRoute(fromPt, pt2);
+                        }}
+                        style={{ display:"block", width:"100%", padding:"11px 14px", textAlign:"left",
+                          background:"none", border:"none", borderBottom:"1px solid rgba(255,255,255,0.06)",
+                          cursor:"pointer", color:"#fff", fontSize:12 }}>
+                          🔴 {s.stop_name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
 
                 {/* Estado vazio */}
-                {!fromPt && !toPt && !routeLoading && (
-                  <div style={{ textAlign:"center", padding:"24px 0",
+                {!toPt && !routeLoading && fromPt && (
+                  <div style={{ textAlign:"center", padding:"20px 0",
                     color:"rgba(255,255,255,0.35)", fontSize:13, lineHeight:1.8 }}>
-                    Digite a origem e o destino acima<br/>
-                    ou toque 📍 e clique no mapa
+                    Digite o destino acima<br/>
+                    ou toque 📍 para marcar no mapa
+                  </div>
+                )}
+                {!fromPt && !routeGpsLoading && !routeLoading && (
+                  <div style={{ textAlign:"center", padding:"20px 0",
+                    color:"rgba(255,255,255,0.35)", fontSize:12 }}>
+                    Permita o acesso à localização para calcular a rota
                   </div>
                 )}
 
