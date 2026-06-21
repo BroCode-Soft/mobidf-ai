@@ -88,6 +88,45 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Configure production environment
+        run: |
+          cat > .env << 'ENVEOF'
+          # ============================================================================
+          # PostgreSQL Configuration - Production
+          # ============================================================================
+          POSTGRES_USER=mobidf
+          POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD_PROD }}
+          POSTGRES_DB=mobidf
+          POSTGRES_PORT=5432
+          
+          # ============================================================================
+          # Backend Configuration - Production
+          # ============================================================================
+          BACKEND_PORT=8000
+          DEBUG=false
+          SECRET_KEY=${{ secrets.SECRET_KEY_PROD }}
+          CORS_ORIGINS=https://mobidf.brocode.net.br,https://www.mobidf.brocode.net.br
+          
+          # ETL / External APIs
+          GTFS_DF_URL=https://www.dados.df.gov.br/dataset/gtfs-df/resource/gtfs-df.zip
+          GTFS_RT_URL=https://www.semob.df.gov.br/gtfs-rt/vehicle-positions
+          IBGE_API_URL=https://servicodados.ibge.gov.br/api/v3
+          GOOGLE_MAPS_API_KEY=${{ secrets.GOOGLE_MAPS_API_KEY }}
+          
+          # ============================================================================
+          # Frontend Configuration - Production
+          # ============================================================================
+          FRONTEND_PORT=3000
+          NEXT_PUBLIC_API_URL=https://mobidf.brocode.net.br/api
+          NODE_ENV=production
+          NEXT_PUBLIC_MAP_TILE_URL=https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png
+          ENVEOF
+          
+          echo "✓ .env configured for production"
+          echo "✓ CORS_ORIGINS: $(grep CORS_ORIGINS .env)"
+          echo "✓ NEXT_PUBLIC_API_URL: $(grep NEXT_PUBLIC_API_URL .env)"
+          echo "✓ NODE_ENV: $(grep NODE_ENV .env)"
+
       - name: Log in to Container Registry on self-hosted
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
@@ -98,10 +137,12 @@ jobs:
         env:
           COMPOSE_FILE: docker-compose.yml
 
-      - name: Restart services
+      - name: Restart services with production overrides
         run: |
-          docker compose down
-          docker compose up -d
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml down
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+          
+          echo "✓ Services started with production configuration"
         env:
           COMPOSE_FILE: docker-compose.yml
 
@@ -115,6 +156,15 @@ jobs:
           
           echo "Frontend health check:"
           curl -f http://localhost:3000 || echo "Frontend health check pending..."
+          
+          echo ""
+          echo "Verifying environment configuration:"
+          echo "Backend environment:"
+          docker exec mobidf-backend env | grep -E "CORS_ORIGINS|NODE_ENV|DEBUG" || echo "Could not verify backend env"
+          
+          echo ""
+          echo "Frontend environment:"
+          docker exec mobidf-frontend env | grep -E "NEXT_PUBLIC_API_URL|NODE_ENV" || echo "Could not verify frontend env"
 
       - name: Clean up Docker login
         if: always()
